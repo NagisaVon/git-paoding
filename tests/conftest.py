@@ -26,10 +26,13 @@ class FakeBackend:
     creates: list[int] = field(default_factory=list)
     updates: list[int] = field(default_factory=list)
     closes: list[int] = field(default_factory=list)
+    gets: list[int] = field(default_factory=list)
     lists: int = 0
+    call_log: list[str] = field(default_factory=list)
 
     def check_ready(self) -> None:
         self.ready_checks += 1
+        self.call_log.append("check_ready")
 
     def create_draft_pr(
         self,
@@ -53,6 +56,7 @@ class FakeBackend:
         )
         self.prs[number] = pr
         self.creates.append(number)
+        self.call_log.append(f"create:{number}")
         return pr
 
     def update_pr(self, number: int, *, title: str, body: str) -> PRRecord:
@@ -60,6 +64,7 @@ class FakeBackend:
         updated = current.model_copy(update={"title": title, "body": body})
         self.prs[number] = updated
         self.updates.append(number)
+        self.call_log.append(f"update:{number}")
         return updated
 
     def close_pr(self, number: int) -> PRRecord:
@@ -67,9 +72,12 @@ class FakeBackend:
         closed = current.model_copy(update={"state": PRState.CLOSED})
         self.prs[number] = closed
         self.closes.append(number)
+        self.call_log.append(f"close:{number}")
         return closed
 
     def get_pr(self, number: int) -> PRRecord:
+        self.gets.append(number)
+        self.call_log.append(f"get:{number}")
         try:
             return self.prs[number]
         except KeyError as error:
@@ -77,6 +85,7 @@ class FakeBackend:
 
     def list_open_prs(self) -> list[PRRecord]:
         self.lists += 1
+        self.call_log.append("list_open_prs")
         return [pr for pr in self.prs.values() if pr.state is PRState.OPEN]
 
     def seed(self, pr: PRRecord) -> None:

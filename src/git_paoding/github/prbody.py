@@ -7,6 +7,12 @@ from git_paoding.core.model import SliceId
 MACHINE_REGION_START = "<!-- paoding-managed:start -->"
 MACHINE_REGION_END = "<!-- paoding-managed:end -->"
 SLICE_MARKER_PREFIX = "<!-- paoding-slice-id: "
+INTEGRATION_MARKER = "<!-- paoding-integration-pr -->"
+
+HUMAN_NARRATIVE_SCAFFOLD = (
+    "<!-- Add review context: why, what changed, design choices, testing, risks, "
+    "rollback, and cross-slice dependencies. -->"
+)
 
 DO_NOT_MERGE_BANNER = (
     "> [!CAUTION]\n"
@@ -21,16 +27,36 @@ def slice_marker(slice_id: SliceId | str) -> str:
     return f"{SLICE_MARKER_PREFIX}{slice_id} -->"
 
 
-def render_slice_machine_content(*, slice_id: SliceId | str, integration_pr_url: str) -> str:
+def render_slice_machine_content(
+    *,
+    slice_id: SliceId | str,
+    integration_pr_url: str,
+    currently_empty: bool = False,
+) -> str:
     """Render the minimal T06-managed slice metadata."""
 
-    return "\n\n".join(
-        (
-            DO_NOT_MERGE_BANNER,
-            f"Integration PR: {integration_pr_url}",
-            slice_marker(slice_id),
-        )
-    )
+    parts = [DO_NOT_MERGE_BANNER, f"Integration PR: {integration_pr_url}"]
+    if currently_empty:
+        parts.append("_This slice is currently empty._")
+    parts.append(slice_marker(slice_id))
+    return "\n\n".join(parts)
+
+
+def render_integration_machine_content(
+    slices: list[tuple[str, str, str | None]],
+) -> str:
+    """Render the integration PR's machine-owned slice index."""
+
+    lines = ["## Review slices"]
+    if not slices:
+        lines.append("_No active review slices._")
+    for slice_id, title, url in slices:
+        if url is None:
+            lines.append(f"- `{slice_id}` — {title} _(currently empty)_")
+        else:
+            lines.append(f"- [{title}]({url}) (`{slice_id}`)")
+    lines.extend(("", INTEGRATION_MARKER))
+    return "\n".join(lines)
 
 
 def machine_region(content: str) -> str:
@@ -65,6 +91,7 @@ def rewrite_slice_body(
     *,
     slice_id: SliceId | str,
     integration_pr_url: str,
+    currently_empty: bool = False,
 ) -> str:
     """Refresh the minimal slice machine region without touching narrative text."""
 
@@ -73,5 +100,16 @@ def rewrite_slice_body(
         render_slice_machine_content(
             slice_id=slice_id,
             integration_pr_url=integration_pr_url,
+            currently_empty=currently_empty,
         ),
     )
+
+
+def rewrite_integration_body(
+    body: str,
+    *,
+    slices: list[tuple[str, str, str | None]],
+) -> str:
+    """Refresh only the integration PR's machine-owned slice index."""
+
+    return rewrite_machine_region(body, render_integration_machine_content(slices))

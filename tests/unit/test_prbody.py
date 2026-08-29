@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 
 from git_paoding.github.prbody import (
+    INTEGRATION_MARKER,
     MACHINE_REGION_END,
     MACHINE_REGION_START,
+    render_integration_machine_content,
     render_slice_machine_content,
+    rewrite_integration_body,
     rewrite_machine_region,
     rewrite_slice_body,
     slice_marker,
@@ -87,3 +90,33 @@ def test_empty_body_becomes_only_the_machine_region() -> None:
     assert rewrite_machine_region("", "managed") == (
         f"{MACHINE_REGION_START}\nmanaged\n{MACHINE_REGION_END}"
     )
+
+
+@pytest.mark.unit
+def test_integration_index_links_published_slices_and_labels_empty_ones() -> None:
+    content = render_integration_machine_content(
+        [
+            ("storage", "Storage", "https://example.test/pulls/2"),
+            ("empty", "Later work", None),
+        ]
+    )
+
+    assert "[Storage](https://example.test/pulls/2) (`storage`)" in content
+    assert "`empty` — Later work _(currently empty)_" in content
+    assert INTEGRATION_MARKER in content
+
+
+@pytest.mark.unit
+def test_integration_rewrite_preserves_human_narrative_on_no_op_refresh() -> None:
+    narrative = "Why this integrated change exists.  "
+    first = rewrite_integration_body(
+        narrative,
+        slices=[("storage", "Storage", "https://example.test/pulls/2")],
+    )
+    second = rewrite_integration_body(
+        first,
+        slices=[("storage", "Storage", "https://example.test/pulls/2")],
+    )
+
+    assert second == first
+    assert second.startswith(narrative)
