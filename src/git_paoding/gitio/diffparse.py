@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from git_paoding.gitio.runner import run_git
@@ -33,6 +33,21 @@ class RawDiffHunk:
     is_mode_change: bool = False
     is_symlink: bool = False
     no_newline_at_eof: bool = False
+    base_oid: str | None = None
+    final_oid: str | None = None
+    base_mode: str | None = None
+    final_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RawFileChange:
+    """Object-database identity for one changed path."""
+
+    path: str
+    base_oid: str | None
+    final_oid: str | None
+    base_mode: str | None
+    final_mode: str | None
 
 
 @dataclass(slots=True)
@@ -172,10 +187,44 @@ def parse_diff(diff: bytes | str) -> tuple[RawDiffHunk, ...]:
     return tuple(records)
 
 
+def _optional_raw_value(value: bytes) -> str | None:
+    decoded = value.decode("ascii")
+    return None if not decoded.strip("0") else decoded
+
+
+def _parse_raw_changes(raw_diff: bytes) -> dict[str, _RawFileChange]:
+    """Parse ``git diff --raw -z`` metadata without losing unusual path bytes."""
+
+    fields = raw_diff.split(b"\0")
+    changes: dict[str, _RawFileChange] = {}
+    index = 0
+    while index < len(fields) and fields[index]:
+        metadata = fields[index]
+        if index + 1 >= len(fields):
+            raise ValueError("Raw Git diff ended before its path field")
+        raw_path = fields[index + 1]
+        parts = metadata.removeprefix(b":").split(b" ")
+        if len(parts) != 5:
+            raise ValueError(f"Unexpected raw Git diff metadata: {metadata!r}")
+        base_mode, final_mode, base_oid, final_oid, status = parts
+        if status.startswith((b"R", b"C")):
+            raise ValueError("Raw Git diff unexpectedly reported a rename or copy")
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        changes[path] = _RawFileChange(
+            path=path,
+            base_oid=_optional_raw_value(base_oid),
+            final_oid=_optional_raw_value(final_oid),
+            base_mode=_optional_raw_value(base_mode),
+            final_mode=_optional_raw_value(final_mode),
+        )
+        index += 2
+    return changes
+
+
 def diff_trees(repo: Path, base: str, final: str) -> tuple[RawDiffHunk, ...]:
     """Read and parse a deterministic, zero-context tree diff."""
 
-    output = run_git(
+    patch_output = run_git(
         (
             "-c",
             "core.quotePath=false",
@@ -183,6 +232,7 @@ def diff_trees(repo: Path, base: str, final: str) -> tuple[RawDiffHunk, ...]:
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
+            "--full-index",
             "--unified=0",
             "--no-renames",
             base,
@@ -191,4 +241,33 @@ def diff_trees(repo: Path, base: str, final: str) -> tuple[RawDiffHunk, ...]:
         ),
         cwd=repo,
     ).stdout
-    return parse_diff(output)
+    raw_output = run_git(
+        (
+            "diff",
+            "--raw",
+            "-z",
+            "--abbrev=40",
+            "--no-renames",
+            base,
+            final,
+            "--",
+        ),
+        cwd=repo,
+    ).stdout
+    changes = _parse_raw_changes(raw_output)
+    enriched: list[RawDiffHunk] = []
+    for hunk in parse_diff(patch_output):
+        try:
+            change = changes[hunk.path]
+        except KeyError as error:
+            raise ValueError(f"Patch path missing from raw Git diff: {hunk.path!r}") from error
+        enriched.append(
+            replace(
+                hunk,
+                base_oid=change.base_oid,
+                final_oid=change.final_oid,
+                base_mode=change.base_mode,
+                final_mode=change.final_mode,
+            )
+        )
+    return tuple(enriched)
