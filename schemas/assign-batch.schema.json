@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "Machine contract accepted by ``assign --batch``.",
+  "properties": {
+    "assignments": {
+      "patternProperties": {
+        "^[a-z0-9]+(?:-[a-z0-9]+)*$": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "Assignments",
+      "type": "object"
+    },
+    "contract_version": {
+      "const": 0,
+      "default": 0,
+      "title": "Contract Version",
+      "type": "integer"
+    },
+    "force": {
+      "default": false,
+      "title": "Force",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "assignments"
+  ],
+  "title": "AssignBatchRequest",
+  "type": "object"
+}
