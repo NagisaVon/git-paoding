@@ -1,3 +1,16 @@
+# Local project working documents
+.local/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

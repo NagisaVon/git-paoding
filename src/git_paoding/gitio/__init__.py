@@ -1,0 +1,1 @@
+"""Git plumbing package."""

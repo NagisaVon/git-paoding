@@ -1,0 +1,1 @@
+"""Generated Git reference management."""
