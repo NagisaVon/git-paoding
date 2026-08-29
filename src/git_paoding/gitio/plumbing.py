@@ -1,0 +1,1 @@
+"""Git object plumbing helpers."""
