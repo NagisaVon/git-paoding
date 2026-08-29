@@ -1,0 +1,42 @@
+{
+  "contract_version": 0,
+  "session": {
+    "canonical_branch": "feature/cp2",
+    "base_ref": "origin/main",
+    "base_oid": "1111111111111111111111111111111111111111",
+    "last_final_oid": "2222222222222222222222222222222222222222",
+    "focus_slice": null,
+    "integration_pr": 41
+  },
+  "slices": [
+    {
+      "id": "review",
+      "title": "Review behavior",
+      "status": "active",
+      "pr_number": 42,
+      "diffstat": {
+        "files_changed": 1,
+        "additions": 1,
+        "deletions": 1
+      }
+    }
+  ],
+  "atoms": [
+    {
+      "atom_id": "a1b2c3d4",
+      "path": "scenario.txt",
+      "kind": "modify",
+      "base_start": 2,
+      "base_len": 1,
+      "final_start": 2,
+      "final_len": 1,
+      "gap_seq": 0,
+      "content_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "owner": "review",
+      "state": "assigned",
+      "preview": "-alpha = \"base\"\n+alpha = \"slice\""
+    }
+  ],
+  "unassigned_count": 0,
+  "ambiguous_count": 0
+}
