@@ -35,6 +35,10 @@ def _hunk(
         is_add_file=is_add_file,
         is_delete_file=is_delete_file,
         is_binary=is_binary,
+        base_oid="1" * 40 if is_binary else None,
+        final_oid="2" * 40 if is_binary else None,
+        base_mode="100644" if is_binary else None,
+        final_mode="100644" if is_binary else None,
     )
 
 

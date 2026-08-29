@@ -25,7 +25,18 @@ def _hunk(
     is_binary: bool = False,
     is_mode_change: bool = False,
     is_symlink: bool = False,
+    base_oid: str | None = None,
+    final_oid: str | None = None,
+    base_mode: str | None = None,
+    final_mode: str | None = None,
 ) -> RawDiffHunk:
+    is_whole_file = is_binary or is_mode_change or is_symlink
+    if is_whole_file:
+        base_oid = base_oid or (None if is_add_file else "1" * 40)
+        final_oid = final_oid or (None if is_delete_file else "2" * 40)
+        default_mode = "120000" if is_symlink else "100644"
+        base_mode = base_mode or (None if is_add_file else default_mode)
+        final_mode = final_mode or (None if is_delete_file else default_mode)
     return RawDiffHunk(
         path=path,
         base_start=base_start,
@@ -39,6 +50,10 @@ def _hunk(
         is_binary=is_binary,
         is_mode_change=is_mode_change,
         is_symlink=is_symlink,
+        base_oid=base_oid,
+        final_oid=final_oid,
+        base_mode=base_mode,
+        final_mode=final_mode,
     )
 
 
@@ -129,6 +144,77 @@ def test_build_atoms_adds_a_deterministic_collision_suffix() -> None:
 
     assert atoms[1].atom_id == f"{atoms[0].atom_id}-2"
     assert atoms[2].atom_id == f"{atoms[0].atom_id}-3"
+
+
+@pytest.mark.unit
+def test_whole_file_fingerprint_changes_with_git_object_identity() -> None:
+    first = build_atoms((_hunk(is_binary=True, final_oid="2" * 40),))[0]
+    second = build_atoms((_hunk(is_binary=True, final_oid="3" * 40),))[0]
+    mode_only = build_atoms(
+        (
+            _hunk(
+                is_mode_change=True,
+                final_oid="1" * 40,
+                base_mode="100644",
+                final_mode="100755",
+            ),
+        )
+    )[0]
+
+    assert first.content_hash != second.content_hash
+    assert first.atom_id != second.atom_id
+    assert mode_only.content_hash not in {first.content_hash, second.content_hash}
+
+
+@pytest.mark.unit
+def test_mode_and_text_change_collapses_to_one_whole_file_atom() -> None:
+    hunks = (
+        _hunk(
+            path="script.sh",
+            base_start=1,
+            final_start=1,
+            is_mode_change=True,
+            base_mode="100644",
+            final_mode="100755",
+        ),
+        _hunk(
+            path="script.sh",
+            base_start=20,
+            final_start=20,
+            removed=("later-before\n",),
+            added=("later-after\n",),
+            is_mode_change=True,
+            base_mode="100644",
+            final_mode="100755",
+        ),
+    )
+
+    replay_atoms = atomize_hunks(hunks)
+
+    assert len(replay_atoms) == 1
+    atom = replay_atoms[0].atom
+    assert atom.kind is AtomKind.WHOLE_FILE
+    assert (atom.base_start, atom.base_len, atom.final_start, atom.final_len) == (0, 0, 0, 0)
+    assert atom.preview.startswith("whole-file: 100644")
+    assert replay_atoms[0].removed_lines == ()
+    assert replay_atoms[0].added_lines == ()
+
+
+@pytest.mark.unit
+def test_whole_file_atom_requires_git_object_metadata() -> None:
+    hunk = RawDiffHunk(
+        path="image.bin",
+        base_start=0,
+        base_len=0,
+        final_start=0,
+        final_len=0,
+        removed_lines=(),
+        added_lines=(),
+        is_binary=True,
+    )
+
+    with pytest.raises(ValueError, match="lacks Git object metadata"):
+        build_atoms((hunk,))
 
 
 @pytest.mark.unit

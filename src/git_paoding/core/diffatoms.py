@@ -41,12 +41,29 @@ def _hash_fields(fields: Iterable[bytes]) -> str:
     return digest.hexdigest()
 
 
-def _content_hash(hunk: RawDiffHunk) -> str:
+def _text_content_hash(hunk: RawDiffHunk) -> str:
     fields = [b"removed"]
     fields.extend(_line_bytes(line) for line in hunk.removed_lines)
     fields.append(b"added")
     fields.extend(_line_bytes(line) for line in hunk.added_lines)
     return _hash_fields(fields)
+
+
+def _whole_file_content_hash(hunk: RawDiffHunk) -> str:
+    """Fingerprint a non-text change from its authoritative Git tree entries."""
+
+    descriptors = (hunk.base_mode, hunk.base_oid, hunk.final_mode, hunk.final_oid)
+    if all(value is None for value in descriptors):
+        raise ValueError(f"whole-file hunk for {hunk.path!r} lacks Git object metadata")
+    return _hash_fields(
+        (
+            b"whole-file",
+            (hunk.base_mode or "missing").encode("ascii"),
+            (hunk.base_oid or "missing").encode("ascii"),
+            (hunk.final_mode or "missing").encode("ascii"),
+            (hunk.final_oid or "missing").encode("ascii"),
+        )
+    )
 
 
 def _atom_id_digest(
@@ -78,6 +95,19 @@ def _kind(hunk: RawDiffHunk) -> AtomKind:
     return AtomKind.MODIFY
 
 
+def _whole_file_preview(hunk: RawDiffHunk) -> str:
+    def render(mode: str | None, oid: str | None) -> str:
+        if mode is None and oid is None:
+            return "missing"
+        short_oid = (oid or "unknown")[:8]
+        return f"{mode or 'unknown'} {short_oid}"
+
+    return (
+        f"whole-file: {render(hunk.base_mode, hunk.base_oid)} -> "
+        f"{render(hunk.final_mode, hunk.final_oid)}"
+    )
+
+
 def _preview(hunk: RawDiffHunk) -> str:
     def safe_line(prefix: str, line: str) -> str:
         raw_line = _line_bytes(line)
@@ -103,20 +133,38 @@ def atomize_hunks(hunks: Sequence[RawDiffHunk]) -> tuple[ReplayAtom, ...]:
 
     gap_counts: dict[tuple[str, int], int] = defaultdict(int)
     id_counts: dict[str, int] = defaultdict(int)
+    whole_file_descriptors: dict[str, tuple[str | None, ...]] = {}
     replay_atoms: list[ReplayAtom] = []
 
     for hunk in hunks:
+        kind = _kind(hunk)
+        is_whole_file = kind is AtomKind.WHOLE_FILE
+        if is_whole_file:
+            descriptor = (hunk.base_mode, hunk.base_oid, hunk.final_mode, hunk.final_oid)
+            prior_descriptor = whole_file_descriptors.get(hunk.path)
+            if prior_descriptor is not None:
+                if descriptor != prior_descriptor:
+                    raise ValueError(
+                        f"whole-file hunks for {hunk.path!r} disagree on Git object metadata"
+                    )
+                continue
+            whole_file_descriptors[hunk.path] = descriptor
+
         gap_seq = 0
-        if hunk.base_len == 0:
+        base_start = 0 if is_whole_file else hunk.base_start
+        base_len = 0 if is_whole_file else hunk.base_len
+        final_start = 0 if is_whole_file else hunk.final_start
+        final_len = 0 if is_whole_file else hunk.final_len
+        if not is_whole_file and base_len == 0:
             gap_key = (hunk.path, hunk.base_start)
             gap_seq = gap_counts[gap_key]
             gap_counts[gap_key] += 1
 
-        content_hash = _content_hash(hunk)
+        content_hash = _whole_file_content_hash(hunk) if is_whole_file else _text_content_hash(hunk)
         short_id = _atom_id_digest(
             path=hunk.path,
-            base_start=hunk.base_start,
-            base_len=hunk.base_len,
+            base_start=base_start,
+            base_len=base_len,
             gap_seq=gap_seq,
             content_hash=content_hash,
         )[:8]
@@ -127,22 +175,26 @@ def atomize_hunks(hunks: Sequence[RawDiffHunk]) -> tuple[ReplayAtom, ...]:
         atom = Atom(
             atom_id=atom_id,
             path=hunk.path,
-            kind=_kind(hunk),
-            base_start=hunk.base_start,
-            base_len=hunk.base_len,
-            final_start=hunk.final_start,
-            final_len=hunk.final_len,
+            kind=kind,
+            base_start=base_start,
+            base_len=base_len,
+            final_start=final_start,
+            final_len=final_len,
             gap_seq=gap_seq,
             content_hash=content_hash,
             owner=None,
             state=AtomState.UNASSIGNED,
-            preview=_preview(hunk),
+            preview=_whole_file_preview(hunk) if is_whole_file else _preview(hunk),
         )
         replay_atoms.append(
             ReplayAtom(
                 atom=atom,
-                removed_lines=tuple(_line_bytes(line) for line in hunk.removed_lines),
-                added_lines=tuple(_line_bytes(line) for line in hunk.added_lines),
+                removed_lines=(
+                    () if is_whole_file else tuple(_line_bytes(line) for line in hunk.removed_lines)
+                ),
+                added_lines=(
+                    () if is_whole_file else tuple(_line_bytes(line) for line in hunk.added_lines)
+                ),
             )
         )
 
