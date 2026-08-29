@@ -1,0 +1,12 @@
+[
+  {
+    "path": "value.txt",
+    "base_start": 1,
+    "base_len": 1,
+    "final_start": 1,
+    "final_len": 1,
+    "removed_lines": ["before"],
+    "added_lines": ["after"],
+    "no_newline_at_eof": true
+  }
+]

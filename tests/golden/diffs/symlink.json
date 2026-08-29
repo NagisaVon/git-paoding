@@ -1,0 +1,14 @@
+[
+  {
+    "path": "current",
+    "base_start": 0,
+    "base_len": 0,
+    "final_start": 1,
+    "final_len": 1,
+    "removed_lines": [],
+    "added_lines": ["releases/latest"],
+    "is_add_file": true,
+    "is_symlink": true,
+    "no_newline_at_eof": true
+  }
+]
