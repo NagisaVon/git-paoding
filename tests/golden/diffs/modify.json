@@ -1,0 +1,11 @@
+[
+  {
+    "path": "example.txt",
+    "base_start": 2,
+    "base_len": 1,
+    "final_start": 2,
+    "final_len": 1,
+    "removed_lines": ["old line\n"],
+    "added_lines": ["new line\n"]
+  }
+]

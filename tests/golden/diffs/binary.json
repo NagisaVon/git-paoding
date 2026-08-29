@@ -1,0 +1,12 @@
+[
+  {
+    "path": "image.bin",
+    "base_start": 0,
+    "base_len": 0,
+    "final_start": 0,
+    "final_len": 0,
+    "removed_lines": [],
+    "added_lines": [],
+    "is_binary": true
+  }
+]

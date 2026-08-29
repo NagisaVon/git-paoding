@@ -1,0 +1,12 @@
+[
+  {
+    "path": "deleted.txt",
+    "base_start": 1,
+    "base_len": 2,
+    "final_start": 0,
+    "final_len": 0,
+    "removed_lines": ["first\n", "second\n"],
+    "added_lines": [],
+    "is_delete_file": true
+  }
+]
