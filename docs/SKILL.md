@@ -11,9 +11,8 @@ description:
 
 # git-paoding
 
-> **Draft:** This skill is pre-release until the final dry-run. Commands marked
-> **integration draft** are pending CLI integration and must be checked against
-> `git-paoding --help` before use.
+> **Draft:** This skill remains pre-release until the final dry-run and release
+> review.
 
 Use `git-paoding` to partition the current `Base -> Final` diff into human-sized
 semantic review slices. Keep one canonical integrated implementation state
@@ -88,20 +87,20 @@ git-paoding status --json
 ```
 
 Interpret exit code `2` as **action needed**, not an operational failure. Read
-the versioned JSON atom list. Use atom IDs as the safest precise selectors.
-Path, glob, directory, and range selectors are an **integration draft** until
-the completed selector CLI lands.
+the versioned JSON atom list. Use atom IDs for precise selection; paths,
+directories, globs, and Final-coordinate ranges select broader atom sets.
 
 Line ranges use Final coordinates: `path:20-45` means lines 20 through 45 in the
 file at the canonical branch tip. A partial range selects the whole atom; ranges
 do not split atoms.
 
-Previews are short. If a preview is insufficient, read the current file at
+Previews are short. Run `git-paoding status --full` for complete changed-hunk
+previews. If surrounding context is still needed, read the current file at
 `final_start` through `final_start + final_len - 1` before assigning; do not
 guess from the preview. For a deletion or other atom with no Final lines,
 inspect the relevant Base-side change instead.
 
-### 2. Assign — integration draft
+### 2. Assign
 
 Prepare `paoding-assignments.json` using the frozen batch contract:
 
@@ -122,8 +121,8 @@ Then run:
 git-paoding assign --batch paoding-assignments.json
 ```
 
-This exact batch invocation is **pending final CLI verification**. On the
-current main branch, use the implemented form instead:
+For an interactive assignment, pass the slice followed by one or more
+selectors:
 
 ```bash
 git-paoding assign storage src/storage.py
@@ -132,9 +131,11 @@ git-paoding assign tests tests/test_storage.py
 
 Review the assignment echo: it must list every moved or skipped atom with a
 preview. Path and range selectors should claim only unassigned atoms by default.
-Reassignment requires an explicit override; the final `--force` spelling is also
-pending CLI verification. If a selector matches nothing or an atom ID became
-stale after a new commit, rerun `status --json` rather than guessing.
+Reassignment through a broad selector requires the explicit `--force` option;
+an exact atom ID may take its atom directly. For batch repartitioning, set the
+JSON `force` field instead of combining `--force` with `--batch`. If a selector
+matches nothing or an atom ID became stale after a new commit, rerun
+`status --json` rather than guessing.
 
 ### 3. Publish
 
@@ -155,7 +156,7 @@ Do not loop indefinitely. Retry after a concrete local correction; ask the
 author when the fix needs new credentials, a branch push, a changed base, or
 another external mutation.
 
-## Focus review feedback — integration draft
+## Focus review feedback
 
 For a task targeted at an existing slice, focus may act as a prior for genuinely
 new atoms:
@@ -166,9 +167,8 @@ git-paoding status --json
 git-paoding focus --clear
 ```
 
-These commands are **pending final CLI verification**. Focus must not overwrite
-confidently matched existing ownership. Clear it when the targeted task ends so
-unrelated later work does not default to that slice.
+Focus must not overwrite confidently matched existing ownership. Clear it when
+the targeted task ends so unrelated later work does not default to that slice.
 
 ## Recovery
 
@@ -184,15 +184,15 @@ unrelated later work does not default to that slice.
 - If a slice becomes empty, publication may leave its existing Draft PR open and
   mark it empty; do not invent changes merely to keep the projection nonempty.
 
-After the integration PR merges, the planned command is:
+After GitHub reports the integration PR as merged, run:
 
 ```bash
 git-paoding archive
 ```
 
-`archive` is an **integration draft pending final CLI verification**. It should
-close slice PRs, retain their URLs and discussion history, and clean generated
-refs; it must not merge them.
+`archive` closes slice PRs, retains their URLs and discussion history, and
+cleans generated refs; it never merges them. It refuses to run while the
+integration PR is still open or merely closed.
 
 ## Validate this draft
 
@@ -202,7 +202,8 @@ From the `git-paoding` repository, run the isolated documentation smoke:
 python3 docs/smoke_doc_commands.py
 ```
 
-Once batch, focus, lifecycle, and archive commands land, run the strict gate:
+Run the strict release gate to require batch, `--force`, focus, slice lifecycle,
+and archive commands:
 
 ```bash
 PAODING_REQUIRE_FINAL_CLI=1 python3 docs/smoke_doc_commands.py

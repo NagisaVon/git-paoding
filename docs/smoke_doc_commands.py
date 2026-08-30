@@ -2,10 +2,10 @@
 # cspell:words paoding PAODING
 """Smoke the commands documented in README.md and docs/SKILL.md.
 
-The default path exercises every command available on the current main branch in
-an isolated repository, including a full publish against a local bare remote and
-a stateful fake ``gh`` executable. Set ``PAODING_REQUIRE_FINAL_CLI=1`` after CLI
-integration to require the batch, focus, slice lifecycle, and archive surfaces.
+The default path exercises every documented command in an isolated repository,
+including a full publish and archive against a local bare remote and a stateful
+fake ``gh`` executable. Set ``PAODING_REQUIRE_FINAL_CLI=1`` to make the complete
+integrated command surface an explicit release gate.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-FINAL_COMMANDS = (
+INTEGRATED_COMMANDS = (
+    "git-paoding status --full",
     "git-paoding assign --batch paoding-assignments.json",
     "git-paoding assign storage src/storage.py --force",
     "git-paoding focus storage",
@@ -160,17 +160,26 @@ def paoding_command() -> list[str]:
     if override:
         return shlex.split(override)
 
-    executable = shutil.which("git-paoding")
-    if executable:
-        return [executable]
-
-    python = shutil.which("python3") or sys.executable
     return [
-        python,
+        sys.executable,
         "-c",
         "from git_paoding.cli.main import main; main()",
         "--",
     ]
+
+
+def validate_paoding_command(command: list[str]) -> None:
+    """Ensure the default child reuses this dependency-complete interpreter."""
+
+    if os.environ.get("PAODING_COMMAND"):
+        return
+    selected = Path(command[0]).resolve()
+    current = Path(sys.executable).resolve()
+    if selected != current:
+        raise RuntimeError(
+            "The documentation smoke must run the CLI with its current Python "
+            f"interpreter; selected {selected}, expected {current}"
+        )
 
 
 def install_fake_gh(bin_dir: Path) -> None:
@@ -228,6 +237,7 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     payload = json.loads(status.stdout)
     if payload["unassigned_count"] != 2:
         raise RuntimeError(f"expected two unassigned atoms, got {payload!r}")
+    run([*command, "status", "--full"], cwd=repository, env=env, expected=2)
 
     run([*command, "assign", "storage", "src/storage.py"], cwd=repository, env=env)
     run([*command, "assign", "tests", "tests/test_storage.py"], cwd=repository, env=env)
@@ -243,21 +253,41 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     return repository
 
 
-def final_cli_available(command: list[str], workspace: Path, env: dict[str, str]) -> bool:
-    """Check whether all draft command groups and options have landed."""
+def integrated_cli_available(command: list[str], workspace: Path, env: dict[str, str]) -> bool:
+    """Check whether all documented command groups and options are available."""
 
     top = run([*command, "--help"], cwd=workspace, env=env).stdout
+    status = run([*command, "status", "--help"], cwd=workspace, env=env).stdout
     assign = run([*command, "assign", "--help"], cwd=workspace, env=env).stdout
     slice_help = run([*command, "slice", "--help"], cwd=workspace, env=env).stdout
     return (
         all(name in top for name in ("focus", "archive"))
+        and "--full" in status
         and all(option in assign for option in ("--batch", "--force"))
         and all(name in slice_help for name in ("list", "rename", "remove"))
     )
 
 
-def smoke_final_cli(command: list[str], repository: Path, env: dict[str, str]) -> None:
-    """Exercise draft commands once all planned surfaces are available."""
+def mark_fake_integration_merged(env: dict[str, str], canonical_branch: str) -> None:
+    """Advance the fake integration PR to the state required by archive."""
+
+    state_path = Path(env["PAODING_FAKE_GH_STATE"])
+    state = load_fake_state(state_path)
+    matches = [
+        pr
+        for pr in state["prs"]
+        if pr["headRefName"] == canonical_branch and "paoding-slice-id" not in pr["body"]
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected one fake integration PR for {canonical_branch!r}, found {len(matches)}"
+        )
+    matches[0]["state"] = "MERGED"
+    save_fake_state(state_path, state)
+
+
+def smoke_integrated_cli(command: list[str], repository: Path, env: dict[str, str]) -> None:
+    """Exercise batch, focus, slice lifecycle, and archive commands."""
 
     batch_path = repository / "paoding-assignments.json"
     batch_path.write_text(
@@ -305,6 +335,7 @@ def smoke_final_cli(command: list[str], repository: Path, env: dict[str, str]) -
     )
     run([*command, "slice", "list"], cwd=repository, env=env)
     run([*command, "slice", "remove", "temporary"], cwd=repository, env=env)
+    mark_fake_integration_merged(env, "feature/review")
     run([*command, "archive"], cwd=repository, env=env)
 
 
@@ -315,6 +346,7 @@ def main() -> int:
         return fake_gh(sys.argv[2:])
 
     command = paoding_command()
+    validate_paoding_command(command)
     require_final = os.environ.get("PAODING_REQUIRE_FINAL_CLI") == "1"
     with tempfile.TemporaryDirectory(prefix="git-paoding-doc-smoke-") as temp:
         workspace = Path(temp)
@@ -327,17 +359,17 @@ def main() -> int:
         env["PYTHONPATH"] = f"{ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
         repository = smoke_current_cli(command, workspace, env)
 
-        available = final_cli_available(command, workspace, env)
+        available = integrated_cli_available(command, workspace, env)
         if require_final and not available:
-            pending = "\n".join(f"  - {item}" for item in FINAL_COMMANDS)
-            raise RuntimeError(f"final CLI integration is incomplete; verify:\n{pending}")
+            missing = "\n".join(f"  - {item}" for item in INTEGRATED_COMMANDS)
+            raise RuntimeError(f"the integrated CLI surface is incomplete; verify:\n{missing}")
         if available:
-            smoke_final_cli(command, repository, env)
-            print("Current and final documented commands passed.")
+            smoke_integrated_cli(command, repository, env)
+            print("All documented CLI commands passed.")
         else:
             print("Current documented commands passed.")
-            print("Draft commands pending CLI integration and strict smoke:")
-            for item in FINAL_COMMANDS:
+            print("Integrated commands were not found; strict smoke would reject:")
+            for item in INTEGRATED_COMMANDS:
                 print(f"  - {item}")
     return 0
 

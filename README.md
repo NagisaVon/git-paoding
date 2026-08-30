@@ -3,8 +3,8 @@
 <!-- cspell:words paoding pipx PAODING -->
 
 > **Draft:** This is pre-release documentation until the final skill dry-run and
-> release review. Sections marked **integration draft** describe CLI commands
-> that are planned but are not available on the current main branch.
+> release review. Release-install commands remain provisional until the package
+> is published.
 
 **Agent writes globally. Humans review locally.**
 
@@ -24,18 +24,16 @@ natural joints.
 
 ## Status
 
-The package is preparing for its first release. The current main branch supports
-the core workflow:
+The package is preparing for its first release. The CLI supports the complete
+review lifecycle:
 
 - initialize a session with a pinned base;
-- add stable slice identities;
+- add, list, rename, and remove stable slice identities;
 - inspect the current `Base -> Final` diff as atoms;
-- assign atoms by ID or exact path; and
-- publish or refresh Draft slice PRs and the Draft integration PR.
-
-Batch assignment, focus, complete slice lifecycle commands, and archive are
-documented below as **integration draft** behavior. Recheck their exact help
-text after those CLI changes land.
+- assign atoms by ID, path, directory, glob, or Final line range;
+- batch assignments and use an optional slice focus;
+- publish or refresh Draft slice PRs and the Draft integration PR; and
+- archive slice PRs and generated refs after the integration PR merges.
 
 ## Requirements and installation
 
@@ -58,8 +56,8 @@ uv sync --extra dev --locked
 uv run git-paoding --help
 ```
 
-The following release-install commands are an **integration draft** until the
-package is published. They must be re-run during the release review:
+The following release-install commands are a **release draft** until the package
+is published. They must be re-run during the release review:
 
 ```bash
 uv tool install git-paoding
@@ -84,11 +82,13 @@ git-paoding status --json
 
 `status` is local and read-only. Exit code `2` is expected while it reports
 unassigned or ambiguous atoms. Its JSON includes each atom's ID, path, Base and
-Final ranges, owner, state, and short preview.
+Final ranges, owner, state, and short preview. Use `git-paoding status --full`
+when complete changed-hunk previews are useful.
 
-On the current main branch, assign by an atom ID or an exact path. A path
-selects every atom in that path, and already-owned atoms are reported as
-skipped:
+Assign interactively by an atom ID, path, directory, glob, or Final-coordinate
+line range. Broad selectors preserve already-owned atoms unless `--force` is
+passed; explicit atom IDs may reassign their exact atom without it. Every
+selected atom is echoed as assigned or skipped:
 
 ```bash
 git-paoding assign storage src/storage.py
@@ -116,9 +116,9 @@ so:
 git push -u origin HEAD
 ```
 
-### Three-step agent flow — integration draft
+### Three-step agent flow
 
-The intended agent loop after the remaining CLI integration is:
+The intended agent loop is:
 
 ```bash
 git-paoding status --json
@@ -139,9 +139,19 @@ The batch request uses the frozen versioned contract:
 }
 ```
 
-The exact `assign --batch` spelling is **pending final CLI verification**. Until
-it lands, use the individual `assign <slice> <atom-id-or-exact-path>...` form
-from the current quickstart.
+Batch assignment is all-or-nothing: an unknown slice, invalid selector, or
+cross-slice conflict rejects the entire request. Set the JSON `force` field to
+`true` when a batch is intentionally repartitioning already-owned atoms; do not
+combine the interactive `--force` option with `--batch`.
+
+For targeted review feedback, focus may provide a default owner for genuinely
+new atoms without overwriting confidently matched ownership:
+
+```bash
+git-paoding focus storage
+git-paoding status --json
+git-paoding focus --clear
+```
 
 ## What reviewers should know
 
@@ -201,21 +211,29 @@ PR.
 - Machine-managed PR-body regions can be refreshed. Human narrative outside
   those delimiters is preserved.
 
+After GitHub reports the integration PR as merged, archive the generated review
+surface without merging any slice PR:
+
+```bash
+git-paoding archive
+```
+
 ## Documentation smoke test
 
-Maintainers can exercise every current quickstart command in an isolated local
-repository with a bare Git remote and a fake GitHub CLI backend:
+Maintainers can exercise the documented CLI in an isolated local repository
+with a bare Git remote and a fake GitHub CLI backend:
 
 ```bash
 python3 docs/smoke_doc_commands.py
 ```
 
-After the remaining CLI integration lands, require the draft commands as well:
+The release gate explicitly requires the complete integrated command surface:
 
 ```bash
 PAODING_REQUIRE_FINAL_CLI=1 python3 docs/smoke_doc_commands.py
 ```
 
-The strict run is a release-review gate. Until then, the default smoke prints
-the exact draft commands that still need verification instead of pretending they
-are available.
+The smoke reuses the Python interpreter that launched it, so its child CLI has
+the same installed dependencies. The strict run rejects a missing batch,
+`--force`, focus, slice lifecycle, or archive command instead of silently
+skipping it.
