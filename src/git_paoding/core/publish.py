@@ -1,8 +1,8 @@
-"""T07's idempotent publish orchestration.
+"""Idempotent publish orchestration.
 
-This module is the only core path that may push refs or mutate pull requests.
-It intentionally implements the CP2 vertical-slice surface, leaving archive
-and post-CP2 hardening to their scheduled tasks.
+Ref pushes and pull-request mutations happen only in this module; every other
+core module stays local.  Archive and the wider reconcile/selector semantics
+are deliberately deferred past the CP2 vertical slice.
 """
 
 from __future__ import annotations

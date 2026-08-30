@@ -1,4 +1,9 @@
-"""Base-anchored replay and deterministic synthetic projection construction."""
+"""Replay of Base-anchored atoms and construction of projection commits.
+
+Both halves are deterministic: replay is a pure function of atom payloads, and
+the synthetic commits fix identity and timestamps so an unchanged canonical
+state reproduces byte-identical SHAs.
+"""
 
 from __future__ import annotations
 
@@ -327,8 +332,8 @@ def build_projection(
             final_entry=_lookup_entry(synthetic_root, path),
         )
 
-    # Batch removal makes file/directory replacements deterministic: clear all
-    # touched paths first, then materialize their desired synthetic entries.
+    # Clear every touched path before materializing replacements, so a path
+    # can swap between file and directory without colliding with its old entry.
     for path in sorted(desired_entries, key=lambda value: value.count("/"), reverse=True):
         _delete_path(synthetic_root, path)
     for path in sorted(desired_entries, key=lambda value: value.count("/")):
