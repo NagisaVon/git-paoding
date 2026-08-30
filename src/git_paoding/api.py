@@ -117,15 +117,18 @@ def get_status(
     *,
     canonical_branch: str | None = None,
 ) -> StatusResult:
-    """Reconcile and report local status without refs or GitHub calls."""
+    """Reconcile against the live canonical tip and report status.
+
+    Fully read-only: no refs, no GitHub calls, and no session writes.
+    Reconciliation is deterministic, so a following ``assign`` re-derives the
+    same atom ids without any persisted cache.
+    """
 
     repository = repo.resolve()
     branch = _canonical_branch(repository, canonical_branch)
     store = JsonSessionStore(repository)
     session = store.load(branch)
-    session, _replay_atoms, status = reconcile_and_status(repository, session)
-    # The reconciled atom cache is the sole allowed status-side persistence.
-    store.save(session)
+    _session, _replay_atoms, status = reconcile_and_status(repository, session)
     return status
 
 

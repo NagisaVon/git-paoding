@@ -139,22 +139,24 @@ def test_unassigned_publish_has_zero_remote_calls_or_ref_writes(
     assert ls_remote(scratch.path, "origin", "refs/heads/paoding/*") == ()
 
 
-def test_status_reconciles_cache_without_backend_or_ref_side_effects(
+def test_status_is_fully_read_only(
     scratch_repo_factory: ScratchRepoFactory,
     tmp_path: Path,
     fake_backend: FakeBackend,
 ) -> None:
     scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    session_file = JsonSessionStore(scratch.path).session_path("main")
+    stored_before = session_file.read_bytes()
     calls_before = list(fake_backend.call_log)
-    refs_before = _generated_local_refs(scratch.path)
 
     first = get_status(scratch.path)
     second = get_status(scratch.path)
 
     assert first == second
     assert first.unassigned_count == 1
+    assert session_file.read_bytes() == stored_before
     assert fake_backend.call_log == calls_before
-    assert _generated_local_refs(scratch.path) == refs_before == ()
+    assert _generated_local_refs(scratch.path) == ()
 
 
 def test_empty_slice_is_reported_and_does_not_create_slice_pr(
