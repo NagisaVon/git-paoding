@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from git_paoding.core.model import DiffStat, PRRecord, PRState, SliceId
+from git_paoding.core.model import DiffStat, PaodingError, PRRecord, PRState, SliceId
 from git_paoding.github.backend import GitHubBackend
 from git_paoding.github.prbody import (
     RelatedSliceLink,
@@ -12,6 +12,18 @@ from git_paoding.github.prbody import (
     rewrite_removed_slice_body,
     rewrite_slice_body,
 )
+
+
+class MergedSlicePullRequestError(PaodingError):
+    """Raised when a generated slice pull request was merged accidentally."""
+
+
+def _reject_merged_slice(current: PRRecord) -> None:
+    if current.state is PRState.MERGED:
+        raise MergedSlicePullRequestError(
+            f"Slice pull request #{current.number} is merged; generated review projections "
+            "must only be closed, never merged"
+        )
 
 
 def _update_if_changed(
@@ -40,6 +52,7 @@ def rename_slice_pr(
     """Rename and refresh a slice in place, preserving its PR identity."""
 
     current = backend.get_pr(number)
+    _reject_merged_slice(current)
     desired_body = rewrite_slice_body(
         current.body,
         slice_id=slice_id,
@@ -65,6 +78,7 @@ def remove_slice_pr(
     """Close a removed slice after preserving its narrative and adding a note."""
 
     current = backend.get_pr(number)
+    _reject_merged_slice(current)
     desired_body = rewrite_removed_slice_body(current.body, slice_id=slice_id)
     current = _update_if_changed(
         backend,
@@ -89,6 +103,7 @@ def archive_slice_pr(
     """Close one projection with a durable pointer to merged integration state."""
 
     current = backend.get_pr(number)
+    _reject_merged_slice(current)
     desired_body = rewrite_archived_slice_body(
         current.body,
         integration_pr_number=integration_pr_number,

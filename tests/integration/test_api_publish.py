@@ -28,7 +28,9 @@ from git_paoding.core.model import (
     PublishOutcome,
     SliceStatus,
 )
+from git_paoding.core.publish import PublishError
 from git_paoding.github.backend import DuplicatePullRequestMarkerError
+from git_paoding.github.lifecycle import MergedSlicePullRequestError
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
     INTEGRATION_MARKER,
@@ -516,6 +518,10 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     assert ls_remote(scratch.path, "origin", first_refs.base, first_refs.head) == ()
     assert "Renamed first" not in fake_backend.prs[after_remove.integration_pr or 0].body
 
+    assert after_remove.integration_pr is not None
+    fake_backend.prs[after_remove.integration_pr] = fake_backend.prs[
+        after_remove.integration_pr
+    ].model_copy(update={"state": PRState.MERGED})
     archived = archive(scratch.path, backend=fake_backend)
     assert archived.session.archived is True
     assert JsonSessionStore(scratch.path).load("main").archived is True
@@ -551,3 +557,65 @@ def test_stale_stored_pr_number_falls_back_to_open_marker(
     assert second.slices[0].pr_number == original_number
     assert JsonSessionStore(scratch.path).load("main").slices[0].pr_number == original_number
     assert fake_backend.creates == [1, 2]
+
+
+@pytest.mark.parametrize("integration_state", [PRState.OPEN, PRState.CLOSED])
+def test_archive_rejects_an_unmerged_integration_without_side_effects(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    integration_state: PRState,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    published = publish(scratch.path, backend=fake_backend)
+    integration_number = published.integration_pr
+    slice_number = published.slices[0].pr_number
+    assert integration_number is not None and slice_number is not None
+    fake_backend.prs[integration_number] = fake_backend.prs[integration_number].model_copy(
+        update={"state": integration_state}
+    )
+    refs = generated_refs(branch_key("main"), "review")
+    advertised_before = ls_remote(scratch.path, "origin", refs.base, refs.head)
+    updates_before = list(fake_backend.updates)
+    closes_before = list(fake_backend.closes)
+
+    with pytest.raises(PublishError, match="must be merged before archiving"):
+        archive(scratch.path, backend=fake_backend)
+
+    assert fake_backend.prs[slice_number].state is PRState.OPEN
+    assert fake_backend.updates == updates_before
+    assert fake_backend.closes == closes_before
+    assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
+    assert JsonSessionStore(scratch.path).load("main").archived is False
+
+
+def test_archive_rejects_a_merged_slice_before_cleanup(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    published = publish(scratch.path, backend=fake_backend)
+    integration_number = published.integration_pr
+    slice_number = published.slices[0].pr_number
+    assert integration_number is not None and slice_number is not None
+    fake_backend.prs[integration_number] = fake_backend.prs[integration_number].model_copy(
+        update={"state": PRState.MERGED}
+    )
+    fake_backend.prs[slice_number] = fake_backend.prs[slice_number].model_copy(
+        update={"state": PRState.MERGED}
+    )
+    refs = generated_refs(branch_key("main"), "review")
+    advertised_before = ls_remote(scratch.path, "origin", refs.base, refs.head)
+    updates_before = list(fake_backend.updates)
+    closes_before = list(fake_backend.closes)
+
+    with pytest.raises(MergedSlicePullRequestError, match="must only be closed, never merged"):
+        archive(scratch.path, backend=fake_backend)
+
+    assert fake_backend.updates == updates_before
+    assert fake_backend.closes == closes_before
+    assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
+    assert JsonSessionStore(scratch.path).load("main").archived is False

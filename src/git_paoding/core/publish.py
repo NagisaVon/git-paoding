@@ -32,7 +32,12 @@ from git_paoding.github.backend import (
     GitHubBackend,
     PullRequestNotFoundError,
 )
-from git_paoding.github.lifecycle import archive_slice_pr, remove_slice_pr, rename_slice_pr
+from git_paoding.github.lifecycle import (
+    MergedSlicePullRequestError,
+    archive_slice_pr,
+    remove_slice_pr,
+    rename_slice_pr,
+)
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
     IntegrationSliceLink,
@@ -249,6 +254,11 @@ def _find_slice_pr(
         stored = backend.get_pr(stored_number)
     except PullRequestNotFoundError:
         return None
+    if stored.state is PRState.MERGED:
+        raise MergedSlicePullRequestError(
+            f"Slice pull request #{stored.number} is merged; generated review projections "
+            "must only be closed, never merged"
+        )
     return stored if stored.state is PRState.OPEN else None
 
 
@@ -566,11 +576,17 @@ def archive_session(
                     "Archive requires one identifiable integration PR for the canonical branch"
                 )
             integration_pr = matches[0]
+        if integration_pr.state is not PRState.MERGED:
+            raise PublishError(
+                f"Integration pull request #{integration_pr.number} must be merged before "
+                f"archiving; current state is {integration_pr.state.value!r}"
+            )
         if session.last_final_oid is None:
             raise PublishError("Reconciliation did not resolve a canonical final commit")
 
         updated_slices = list(session.slices)
         branch = branch_key(session.canonical_branch)
+        archive_prs: dict[int, PRRecord] = {}
         for index, slice_ in enumerate(session.slices):
             marker_matches = [pr for pr in open_prs if slice_marker(slice_.id) in pr.body]
             if len(marker_matches) > 1:
@@ -585,6 +601,16 @@ def archive_session(
                     slice_pr = backend.get_pr(slice_.pr_number)
                 except PullRequestNotFoundError:
                     slice_pr = None
+            if slice_pr is not None and slice_pr.state is PRState.MERGED:
+                raise MergedSlicePullRequestError(
+                    f"Slice pull request #{slice_pr.number} is merged; generated review "
+                    "projections must only be closed, never merged"
+                )
+            if slice_pr is not None:
+                archive_prs[index] = slice_pr
+
+        for index, slice_ in enumerate(session.slices):
+            slice_pr = archive_prs.get(index)
             if slice_pr is not None:
                 archived_pr = archive_slice_pr(
                     backend,

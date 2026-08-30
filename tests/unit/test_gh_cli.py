@@ -76,6 +76,17 @@ def test_get_pr_parses_recorded_gh_json(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.unit
+def test_get_pr_parses_merged_integration_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = GhCliBackend(Path("."))
+    sample = (GOLDEN / "pr-view.json").read_text().replace('"state": "OPEN"', '"state": "MERGED"')
+    monkeypatch.setattr(backend, "_run", lambda args: sample)
+
+    record = backend.get_pr(41)
+
+    assert record.state is PRState.MERGED
+
+
+@pytest.mark.unit
 def test_create_draft_pr_uses_recorded_create_and_view_shapes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

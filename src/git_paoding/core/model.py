@@ -97,6 +97,7 @@ class PRState(str, Enum):
 
     OPEN = "open"
     CLOSED = "closed"
+    MERGED = "merged"
 
 
 class PublishOutcome(str, Enum):

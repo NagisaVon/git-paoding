@@ -6,7 +6,12 @@ import pytest
 
 from conftest import FakeBackend
 from git_paoding.core.model import DiffStat, PRRecord, PRState
-from git_paoding.github.lifecycle import archive_slice_pr, remove_slice_pr, rename_slice_pr
+from git_paoding.github.lifecycle import (
+    MergedSlicePullRequestError,
+    archive_slice_pr,
+    remove_slice_pr,
+    rename_slice_pr,
+)
 from git_paoding.github.prbody import HUMAN_NARRATIVE_SCAFFOLD, rewrite_slice_body
 
 
@@ -95,3 +100,23 @@ def test_archive_adds_final_links_before_closing() -> None:
     )
     assert backend.updates == [41]
     assert backend.closes == [41]
+
+
+@pytest.mark.unit
+def test_archive_rejects_an_accidentally_merged_slice() -> None:
+    backend = FakeBackend()
+    _seed_slice(backend)
+    backend.prs[41] = backend.prs[41].model_copy(update={"state": PRState.MERGED})
+
+    with pytest.raises(MergedSlicePullRequestError, match="must only be closed, never merged"):
+        archive_slice_pr(
+            backend,
+            41,
+            integration_pr_number=40,
+            integration_pr_url="https://github.com/example/project/pull/40",
+            merged_commit="abcdef0123456789",
+            merged_commit_url="https://github.com/example/project/commit/abcdef0123456789",
+        )
+
+    assert backend.updates == []
+    assert backend.closes == []
