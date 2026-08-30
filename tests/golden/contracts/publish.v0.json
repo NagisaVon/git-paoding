@@ -1,0 +1,23 @@
+{
+  "contract_version": 0,
+  "slices": [
+    {
+      "slice_id": "review",
+      "title": "Review behavior",
+      "outcome": "no-op",
+      "pr_number": 42,
+      "url": "https://github.com/example/git-paoding-cp2/pull/42"
+    },
+    {
+      "slice_id": "empty-check",
+      "title": "Empty slice contract",
+      "outcome": "empty",
+      "pr_number": null,
+      "url": null
+    }
+  ],
+  "integration_pr": 41,
+  "integration_pr_url": "https://github.com/example/git-paoding-cp2/pull/41",
+  "action_needed": false,
+  "status": null
+}

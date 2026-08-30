@@ -135,6 +135,16 @@ def commit_tree(
     return result.stdout_text().strip()
 
 
+def commit_committer_date(repo: Path, commit_oid: str) -> str:
+    """Return a commit's strict ISO committer date for deterministic synthesis."""
+
+    result = run_git(("show", "--no-patch", "--format=%cI", commit_oid), cwd=repo)
+    date = result.stdout_text().strip()
+    if not date:
+        raise ValueError(f"Commit {commit_oid!r} did not expose a committer date")
+    return date
+
+
 def update_ref(repo: Path, ref: str, new_oid: str | None, *, old_oid: str | None = None) -> None:
     """Create, compare-and-swap, or delete a ref."""
 

@@ -1,0 +1,10 @@
+{
+  "contract_version": 0,
+  "assignments": {
+    "review": [
+      "a1b2c3d4",
+      "src/review.py"
+    ]
+  },
+  "force": false
+}

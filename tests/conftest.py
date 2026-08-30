@@ -4,14 +4,95 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TypeAlias
 
 import pytest
 
+from git_paoding.core.model import PRRecord, PRState
+from git_paoding.github.backend import GitHubBackendError
 from git_paoding.gitio.plumbing import GitIdentity, commit_tree, update_ref
 from git_paoding.gitio.runner import run_git
+
+
+@dataclass(slots=True)
+class FakeBackend:
+    """Deterministic GitHub backend for tests that do not call live GitHub."""
+
+    prs: dict[int, PRRecord] = field(default_factory=dict)
+    next_number: int = 1
+    ready_checks: int = 0
+    creates: list[int] = field(default_factory=list)
+    updates: list[int] = field(default_factory=list)
+    closes: list[int] = field(default_factory=list)
+    gets: list[int] = field(default_factory=list)
+    lists: int = 0
+    call_log: list[str] = field(default_factory=list)
+
+    def check_ready(self) -> None:
+        self.ready_checks += 1
+        self.call_log.append("check_ready")
+
+    def create_draft_pr(
+        self,
+        *,
+        title: str,
+        body: str,
+        base_ref: str,
+        head_ref: str,
+    ) -> PRRecord:
+        number = self.next_number
+        self.next_number += 1
+        pr = PRRecord(
+            number=number,
+            url=f"https://example.test/pulls/{number}",
+            title=title,
+            body=body,
+            state=PRState.OPEN,
+            is_draft=True,
+            base_ref=base_ref,
+            head_ref=head_ref,
+        )
+        self.prs[number] = pr
+        self.creates.append(number)
+        self.call_log.append(f"create:{number}")
+        return pr
+
+    def update_pr(self, number: int, *, title: str, body: str) -> PRRecord:
+        current = self.get_pr(number)
+        updated = current.model_copy(update={"title": title, "body": body})
+        self.prs[number] = updated
+        self.updates.append(number)
+        self.call_log.append(f"update:{number}")
+        return updated
+
+    def close_pr(self, number: int) -> PRRecord:
+        current = self.get_pr(number)
+        closed = current.model_copy(update={"state": PRState.CLOSED})
+        self.prs[number] = closed
+        self.closes.append(number)
+        self.call_log.append(f"close:{number}")
+        return closed
+
+    def get_pr(self, number: int) -> PRRecord:
+        self.gets.append(number)
+        self.call_log.append(f"get:{number}")
+        try:
+            return self.prs[number]
+        except KeyError as error:
+            raise GitHubBackendError(f"Pull request #{number} does not exist") from error
+
+    def list_open_prs(self) -> list[PRRecord]:
+        self.lists += 1
+        self.call_log.append("list_open_prs")
+        return [pr for pr in self.prs.values() if pr.state is PRState.OPEN]
+
+    def seed(self, pr: PRRecord) -> None:
+        """Add a pre-existing PR and keep generated numbers collision-free."""
+
+        self.prs[pr.number] = pr
+        self.next_number = max(self.next_number, pr.number + 1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +123,13 @@ class ScratchRepoFactory(Protocol):
     """Create a scratch repository from Base and Final file maps."""
 
     def __call__(self, base: RepoState, final: RepoState) -> ScratchRepository: ...
+
+
+@pytest.fixture
+def fake_backend() -> FakeBackend:
+    """Return a fresh backend with no live GitHub dependency."""
+
+    return FakeBackend()
 
 
 @dataclass(frozen=True, slots=True)

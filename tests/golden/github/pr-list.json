@@ -1,0 +1,22 @@
+[
+  {
+    "baseRefName": "paoding/feature-a/storage/base",
+    "body": "<!-- paoding-slice-id: storage -->",
+    "headRefName": "paoding/feature-a/storage/head",
+    "isDraft": true,
+    "number": 41,
+    "state": "OPEN",
+    "title": "[SLICE] Storage",
+    "url": "https://github.com/example/project/pull/41"
+  },
+  {
+    "baseRefName": "main",
+    "body": "Integration narrative",
+    "headRefName": "feature/a",
+    "isDraft": false,
+    "number": 40,
+    "state": "OPEN",
+    "title": "Feature A",
+    "url": "https://github.com/example/project/pull/40"
+  }
+]
