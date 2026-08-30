@@ -531,6 +531,7 @@ def test_slice_crud_focus_and_archive_render_only_mutation_deltas(
     assert "review  active  0 files +0 -0" in listed.output
     assert "app.py" not in listed.output
     assert "Removed slice: review" in removed.output
+    assert "atoms are now unassigned" in removed.output
     assert "Renamed slice: review" in renamed.output
     assert "Focus: review" in focused.output
     assert "Focus: cleared" in cleared.output

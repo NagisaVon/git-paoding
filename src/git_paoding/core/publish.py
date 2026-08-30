@@ -1,8 +1,7 @@
-"""Idempotent publish orchestration.
+"""Idempotent publication and archive orchestration.
 
 Ref pushes and pull-request mutations happen only in this module; every other
-core module stays local.  Archive and the wider reconcile/selector semantics
-are deliberately deferred past the CP2 vertical slice.
+core module stays local.
 """
 
 from __future__ import annotations
@@ -28,16 +27,28 @@ from git_paoding.core.model import (
 )
 from git_paoding.core.projection import build_projection
 from git_paoding.core.reconcile import reconcile
-from git_paoding.github.backend import DuplicatePullRequestMarkerError, GitHubBackend
+from git_paoding.github.backend import (
+    DuplicatePullRequestMarkerError,
+    GitHubBackend,
+    PullRequestNotFoundError,
+)
+from git_paoding.github.lifecycle import archive_slice_pr, remove_slice_pr, rename_slice_pr
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
+    IntegrationSliceLink,
+    RelatedSliceLink,
     rewrite_integration_body,
     rewrite_slice_body,
     slice_marker,
 )
 from git_paoding.gitio.diffparse import diff_trees
 from git_paoding.gitio.plumbing import rev_parse
-from git_paoding.gitio.refs import RefSyncResult, generated_refs, sync_projection_refs
+from git_paoding.gitio.refs import (
+    RefSyncResult,
+    delete_projection_refs,
+    generated_refs,
+    sync_projection_refs,
+)
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 from git_paoding.store.lock import SessionLock
 
@@ -58,15 +69,54 @@ class _PreparedSlice:
 def reconcile_and_status(
     repo: Path,
     session: Session,
+    *,
+    full: bool = False,
 ) -> tuple[Session, tuple[ReplayAtom, ...], StatusResult]:
     """Reconcile a session against its live canonical tip and build status."""
 
     final_oid = rev_parse(repo, f"refs/heads/{session.canonical_branch}")
     replay_atoms = atomize_hunks(diff_trees(repo, session.base_oid, final_oid))
-    reconciled_atoms = reconcile(session.atoms, tuple(item.atom for item in replay_atoms))
-    session = session.model_copy(
-        update={"atoms": list(reconciled_atoms), "last_final_oid": final_oid}
+    reconciled_atoms = reconcile(
+        session.atoms,
+        tuple(item.atom for item in replay_atoms),
+        focus_slice=session.focus_slice,
     )
+    atoms = list(reconciled_atoms)
+    if full:
+        atoms = [
+            atom.model_copy(update={"preview": _full_preview(replay_atom)})
+            for atom, replay_atom in zip(atoms, replay_atoms, strict=True)
+        ]
+    session = session.model_copy(update={"atoms": atoms, "last_final_oid": final_oid})
+    status = status_from_session(
+        session,
+        defaulted_atom_ids=reconciled_atoms.defaulted_atom_ids,
+    )
+    return session, replay_atoms, status
+
+
+def _full_preview(replay_atom: ReplayAtom) -> str:
+    """Render every changed line from the authoritative current Git diff."""
+
+    if not replay_atom.removed_lines and not replay_atom.added_lines:
+        return replay_atom.atom.preview
+
+    rendered: list[str] = []
+    for prefix, lines in (("-", replay_atom.removed_lines), ("+", replay_atom.added_lines)):
+        for line in lines:
+            text = line.decode("utf-8", errors="replace")
+            rendered.append(prefix + text)
+            if text and not text.endswith("\n"):
+                rendered.append("\n")
+    return "".join(rendered).removesuffix("\n")
+
+
+def status_from_session(
+    session: Session,
+    *,
+    defaulted_atom_ids: tuple[str, ...] = (),
+) -> StatusResult:
+    """Build a public status report from already-authoritative session state."""
 
     slice_summaries: list[SliceSummary] = []
     for slice_ in session.slices:
@@ -93,13 +143,15 @@ def reconcile_and_status(
             last_final_oid=session.last_final_oid,
             focus_slice=session.focus_slice,
             integration_pr=session.integration_pr,
+            archived=session.archived,
         ),
         slices=slice_summaries,
         atoms=session.atoms,
         unassigned_count=sum(atom.state is AtomState.UNASSIGNED for atom in session.atoms),
         ambiguous_count=sum(atom.state is AtomState.AMBIGUOUS for atom in session.atoms),
+        defaulted_atom_ids=list(defaulted_atom_ids),
     )
-    return session, replay_atoms, status
+    return status
 
 
 def _short_ref(ref: str) -> str:
@@ -127,23 +179,29 @@ def _find_integration_pr(
     session: Session,
     open_prs: list[PRRecord],
 ) -> PRRecord | None:
-    if session.integration_pr is not None:
-        stored = backend.get_pr(session.integration_pr)
-        if stored.state is PRState.OPEN:
-            if stored.head_ref != session.canonical_branch:
-                raise PublishError(
-                    f"Stored integration PR #{stored.number} has head {stored.head_ref!r}, "
-                    f"expected {session.canonical_branch!r}"
-                )
-            return stored
-
     matches = [pr for pr in open_prs if pr.head_ref == session.canonical_branch]
     if len(matches) > 1:
         numbers = ", ".join(f"#{pr.number}" for pr in matches)
         raise PublishError(
             f"Multiple open PRs use canonical head {session.canonical_branch!r}: {numbers}"
         )
-    return matches[0] if matches else None
+    if matches:
+        return matches[0]
+
+    if session.integration_pr is None:
+        return None
+    try:
+        stored = backend.get_pr(session.integration_pr)
+    except PullRequestNotFoundError:
+        return None
+    if stored.state is not PRState.OPEN:
+        return None
+    if stored.head_ref != session.canonical_branch:
+        raise PublishError(
+            f"Stored integration PR #{stored.number} has head {stored.head_ref!r}, "
+            f"expected {session.canonical_branch!r}"
+        )
+    return stored
 
 
 def _ensure_integration_pr(
@@ -166,17 +224,15 @@ def _ensure_integration_pr(
     )
 
 
-def _upsert_slice_pr(
+def _find_slice_pr(
     backend: GitHubBackend,
     *,
     slice_id: str,
-    title: str,
-    integration_pr_url: str,
-    base_ref: str,
-    head_ref: str,
+    stored_number: int | None,
     open_prs: list[PRRecord],
-    currently_empty: bool = False,
-) -> tuple[PRRecord, bool, bool]:
+) -> PRRecord | None:
+    """Resolve identity marker-first, then recover a damaged stored PR body."""
+
     marker = slice_marker(slice_id)
     matches = [pr for pr in open_prs if marker in pr.body]
     if len(matches) > 1:
@@ -185,36 +241,61 @@ def _upsert_slice_pr(
             f"Multiple open pull requests contain marker {marker!r}: {numbers}. "
             "Close or repair the duplicate before publishing."
         )
-    existing = matches[0] if matches else None
-    desired_title = f"[SLICE] {title}"
+    if matches:
+        return matches[0]
+    if stored_number is None:
+        return None
+    try:
+        stored = backend.get_pr(stored_number)
+    except PullRequestNotFoundError:
+        return None
+    return stored if stored.state is PRState.OPEN else None
 
-    if existing is None:
-        body = rewrite_slice_body(
-            HUMAN_NARRATIVE_SCAFFOLD,
-            slice_id=slice_id,
-            integration_pr_url=integration_pr_url,
-            currently_empty=currently_empty,
-        )
-        created = backend.create_draft_pr(
-            title=desired_title,
-            body=body,
-            base_ref=base_ref,
-            head_ref=head_ref,
-        )
-        open_prs.append(created)
-        return created, True, False
 
-    body = rewrite_slice_body(
-        existing.body,
-        slice_id=slice_id,
-        integration_pr_url=integration_pr_url,
-        currently_empty=currently_empty,
+def _slice_diffstat(session: Session, slice_id: str) -> DiffStat:
+    owned = [atom for atom in session.atoms if atom.owner == slice_id]
+    return DiffStat(
+        files_changed=len({atom.path for atom in owned}),
+        additions=sum(atom.final_len for atom in owned),
+        deletions=sum(atom.base_len for atom in owned),
     )
-    if existing.title == desired_title and existing.body == body:
-        return existing, False, False
-    updated = backend.update_pr(existing.number, title=desired_title, body=body)
-    open_prs[open_prs.index(existing)] = updated
-    return updated, False, True
+
+
+def _related_links(
+    session: Session,
+    *,
+    slice_id: str,
+    prs: dict[str, PRRecord],
+) -> tuple[RelatedSliceLink, ...]:
+    owned_paths = {atom.path for atom in session.atoms if atom.owner == slice_id}
+    links: list[RelatedSliceLink] = []
+    for related in session.slices:
+        if related.id == slice_id or related.status is not SliceStatus.ACTIVE:
+            continue
+        related_pr = prs.get(related.id)
+        if related_pr is None:
+            continue
+        related_paths = {atom.path for atom in session.atoms if atom.owner == related.id}
+        shared = tuple(sorted(owned_paths & related_paths))
+        if shared:
+            links.append(
+                RelatedSliceLink(
+                    number=related_pr.number,
+                    title=related.title,
+                    url=related_pr.url,
+                    shared_paths=shared,
+                )
+            )
+    return tuple(links)
+
+
+def _commit_url(pr_url: str, oid: str) -> str:
+    """Derive the repository commit URL from a GitHub pull-request URL."""
+
+    for component in ("/pull/", "/pulls/"):
+        if component in pr_url:
+            return f"{pr_url.split(component, maxsplit=1)[0]}/commit/{oid}"
+    return f"{pr_url.rstrip('/')}/commits/{oid}"
 
 
 def _owned_replay_atoms(
@@ -243,6 +324,8 @@ def publish_session(
     store = JsonSessionStore(repository)
     with SessionLock(repository, canonical_branch):
         session = store.load(canonical_branch)
+        if session.archived:
+            raise PublishError("This review session is archived and cannot be published")
         session, replay_atoms, status = reconcile_and_status(repository, session)
         store.save(session)
 
@@ -285,6 +368,17 @@ def publish_session(
             )
 
         open_prs = backend.list_open_prs()
+        resolved_prs: dict[str, PRRecord] = {}
+        for slice_ in session.slices:
+            existing = _find_slice_pr(
+                backend,
+                slice_id=slice_.id,
+                stored_number=slice_.pr_number,
+                open_prs=open_prs,
+            )
+            if existing is not None:
+                resolved_prs[slice_.id] = existing
+
         integration_pr = _ensure_integration_pr(
             backend,
             session,
@@ -295,82 +389,104 @@ def publish_session(
             open_prs.append(integration_pr)
         session = session.model_copy(update={"integration_pr": integration_pr.number})
 
-        slice_results: list[PublishSliceResult] = []
-        index_rows: list[tuple[str, str, str | None]] = []
+        created_slice_ids: set[str] = set()
         updated_slices = list(session.slices)
+        branch = branch_key(session.canonical_branch)
 
+        # Removed slices keep their stable record for archaeology. Publishing
+        # closes the review PR before deleting its generated refs.
         for index, slice_ in enumerate(session.slices):
+            if slice_.status is SliceStatus.ACTIVE:
+                continue
+            existing = resolved_prs.get(slice_.id)
+            if existing is not None:
+                closed = remove_slice_pr(backend, existing.number, slice_id=slice_.id)
+                updated_slices[index] = slice_.model_copy(update={"pr_number": closed.number})
+            delete_projection_refs(
+                repository,
+                remote,
+                generated_refs(branch, slice_.id),
+            )
+
+        # Resolve every stable identity before creating anything. Missing
+        # mappings are recovered from markers; stale stored numbers fall back
+        # to that same marker result before a new PR is considered.
+        for slice_ in session.slices:
+            if slice_.status is not SliceStatus.ACTIVE:
+                continue
+
+            owns_atoms = any(atom.owner == slice_.id for atom in session.atoms)
+            if not owns_atoms or slice_.id in resolved_prs:
+                continue
+
+            prepared = prepared_slices.get(slice_.id)
+            if prepared is None:
+                raise PublishError(f"Missing prepared projection for non-empty slice {slice_.id!r}")
+            created = backend.create_draft_pr(
+                title=f"[SLICE] {slice_.title}",
+                body=rewrite_slice_body(
+                    HUMAN_NARRATIVE_SCAFFOLD,
+                    slice_id=slice_.id,
+                    integration_pr_url=integration_pr.url,
+                    diffstat=_slice_diffstat(session, slice_.id),
+                ),
+                base_ref=prepared.base_ref,
+                head_ref=prepared.head_ref,
+            )
+            open_prs.append(created)
+            resolved_prs[slice_.id] = created
+            created_slice_ids.add(slice_.id)
+
+        prior_prs = dict(resolved_prs)
+        for slice_ in session.slices:
+            if slice_.status is not SliceStatus.ACTIVE:
+                continue
+            existing = resolved_prs.get(slice_.id)
+            if existing is None:
+                continue
+            refreshed = rename_slice_pr(
+                backend,
+                existing.number,
+                slice_id=slice_.id,
+                title=slice_.title,
+                integration_pr_url=integration_pr.url,
+                diffstat=_slice_diffstat(session, slice_.id),
+                related_slices=_related_links(session, slice_id=slice_.id, prs=resolved_prs),
+                currently_empty=not any(atom.owner == slice_.id for atom in session.atoms),
+            )
+            resolved_prs[slice_.id] = refreshed
+
+        slice_results: list[PublishSliceResult] = []
+        index_rows: list[IntegrationSliceLink] = []
+        for index, slice_ in enumerate(session.slices):
+            pr = resolved_prs.get(slice_.id)
             if slice_.status is not SliceStatus.ACTIVE:
                 slice_results.append(
                     PublishSliceResult(
                         slice_id=slice_.id,
                         title=slice_.title,
                         outcome=PublishOutcome.SKIPPED,
-                        pr_number=slice_.pr_number,
+                        pr_number=updated_slices[index].pr_number,
                     )
                 )
                 continue
 
-            owns_atoms = any(atom.owner == slice_.id for atom in session.atoms)
-            refs = generated_refs(branch_key(session.canonical_branch), slice_.id)
-            base_ref = _short_ref(refs.base)
-            head_ref = _short_ref(refs.head)
-
-            if not owns_atoms:
-                existing = next(
-                    (pr for pr in open_prs if slice_marker(slice_.id) in pr.body),
-                    None,
-                )
-                if existing is None:
-                    index_rows.append((slice_.id, slice_.title, None))
-                    slice_results.append(
-                        PublishSliceResult(
-                            slice_id=slice_.id,
-                            title=slice_.title,
-                            outcome=PublishOutcome.EMPTY,
-                        )
-                    )
-                    continue
-                pr, _created, _updated = _upsert_slice_pr(
-                    backend,
+            if pr is not None:
+                updated_slices[index] = slice_.model_copy(update={"pr_number": pr.number})
+            index_rows.append(
+                IntegrationSliceLink(
                     slice_id=slice_.id,
                     title=slice_.title,
-                    integration_pr_url=integration_pr.url,
-                    base_ref=base_ref,
-                    head_ref=head_ref,
-                    open_prs=open_prs,
-                    currently_empty=True,
+                    number=pr.number if pr is not None else None,
+                    url=pr.url if pr is not None else None,
                 )
-                updated_slices[index] = slice_.model_copy(update={"pr_number": pr.number})
-                index_rows.append((slice_.id, slice_.title, pr.url))
-                slice_results.append(
-                    PublishSliceResult(
-                        slice_id=slice_.id,
-                        title=slice_.title,
-                        outcome=PublishOutcome.EMPTY,
-                        pr_number=pr.number,
-                        url=pr.url,
-                    )
-                )
-                continue
-
-            prepared = prepared_slices.get(slice_.id)
-            if prepared is None:
-                raise PublishError(f"Missing prepared projection for non-empty slice {slice_.id!r}")
-            pr, created, body_updated = _upsert_slice_pr(
-                backend,
-                slice_id=slice_.id,
-                title=slice_.title,
-                integration_pr_url=integration_pr.url,
-                base_ref=prepared.base_ref,
-                head_ref=prepared.head_ref,
-                open_prs=open_prs,
             )
-            updated_slices[index] = slice_.model_copy(update={"pr_number": pr.number})
-            index_rows.append((slice_.id, slice_.title, pr.url))
-            if created:
+            owns_atoms = any(atom.owner == slice_.id for atom in session.atoms)
+            if not owns_atoms:
+                outcome = PublishOutcome.EMPTY
+            elif slice_.id in created_slice_ids:
                 outcome = PublishOutcome.CREATED
-            elif not prepared.ref_sync.is_no_op or body_updated:
+            elif not prepared_slices[slice_.id].ref_sync.is_no_op or prior_prs[slice_.id] != pr:
                 outcome = PublishOutcome.REFRESHED
             else:
                 outcome = PublishOutcome.NO_OP
@@ -379,8 +495,8 @@ def publish_session(
                     slice_id=slice_.id,
                     title=slice_.title,
                     outcome=outcome,
-                    pr_number=pr.number,
-                    url=pr.url,
+                    pr_number=pr.number if pr is not None else None,
+                    url=pr.url if pr is not None else None,
                 )
             )
 
@@ -403,9 +519,99 @@ def publish_session(
             update={"slices": updated_slices, "integration_pr": integration_pr.number}
         )
         store.save(session)
+        defaulted_status = (
+            status_from_session(
+                session,
+                defaulted_atom_ids=tuple(status.defaulted_atom_ids),
+            )
+            if status.defaulted_atom_ids
+            else None
+        )
         return PublishResult(
             slices=slice_results,
             integration_pr=integration_pr.number,
             integration_pr_url=integration_pr.url,
             action_needed=False,
+            status=defaulted_status,
         )
+
+
+def archive_session(
+    repo: Path,
+    *,
+    canonical_branch: str,
+    backend: GitHubBackend,
+    remote: str = "origin",
+) -> StatusResult:
+    """Close slice PRs, delete their refs, and durably archive the session."""
+
+    repository = repo.resolve()
+    store = JsonSessionStore(repository)
+    with SessionLock(repository, canonical_branch):
+        session = store.load(canonical_branch)
+        session, _replay_atoms, _status = reconcile_and_status(repository, session)
+        backend.check_ready()
+        open_prs = backend.list_open_prs()
+
+        integration_pr: PRRecord | None = None
+        if session.integration_pr is not None:
+            try:
+                integration_pr = backend.get_pr(session.integration_pr)
+            except PullRequestNotFoundError:
+                integration_pr = None
+        if integration_pr is None:
+            matches = [pr for pr in open_prs if pr.head_ref == session.canonical_branch]
+            if len(matches) != 1:
+                raise PublishError(
+                    "Archive requires one identifiable integration PR for the canonical branch"
+                )
+            integration_pr = matches[0]
+        if session.last_final_oid is None:
+            raise PublishError("Reconciliation did not resolve a canonical final commit")
+
+        updated_slices = list(session.slices)
+        branch = branch_key(session.canonical_branch)
+        for index, slice_ in enumerate(session.slices):
+            marker_matches = [pr for pr in open_prs if slice_marker(slice_.id) in pr.body]
+            if len(marker_matches) > 1:
+                numbers = ", ".join(f"#{pr.number}" for pr in marker_matches)
+                raise DuplicatePullRequestMarkerError(
+                    f"Multiple open pull requests contain marker {slice_marker(slice_.id)!r}: "
+                    f"{numbers}. Close or repair the duplicate before archiving."
+                )
+            slice_pr = marker_matches[0] if marker_matches else None
+            if slice_pr is None and slice_.pr_number is not None:
+                try:
+                    slice_pr = backend.get_pr(slice_.pr_number)
+                except PullRequestNotFoundError:
+                    slice_pr = None
+            if slice_pr is not None:
+                archived_pr = archive_slice_pr(
+                    backend,
+                    slice_pr.number,
+                    integration_pr_number=integration_pr.number,
+                    integration_pr_url=integration_pr.url,
+                    merged_commit=session.last_final_oid,
+                    merged_commit_url=_commit_url(integration_pr.url, session.last_final_oid),
+                )
+                updated_slices[index] = slice_.model_copy(
+                    update={"pr_number": archived_pr.number, "status": SliceStatus.ARCHIVED}
+                )
+            else:
+                updated_slices[index] = slice_.model_copy(update={"status": SliceStatus.ARCHIVED})
+            delete_projection_refs(
+                repository,
+                remote,
+                generated_refs(branch, slice_.id),
+            )
+
+        session = session.model_copy(
+            update={
+                "slices": updated_slices,
+                "focus_slice": None,
+                "integration_pr": integration_pr.number,
+                "archived": True,
+            }
+        )
+        store.save(session)
+        return status_from_session(session)

@@ -158,6 +158,7 @@ class Session(_Model):
     last_final_oid: NonEmptyString | None = None
     focus_slice: SliceId | None = None
     integration_pr: PositiveInt | None = None
+    archived: bool = False
 
     @model_validator(mode="after")
     def validate_references(self) -> Session:
@@ -212,6 +213,7 @@ class SessionSummary(_Model):
     last_final_oid: NonEmptyString | None = None
     focus_slice: SliceId | None = None
     integration_pr: PositiveInt | None = None
+    archived: bool = False
 
 
 class SliceSummary(_Model):
@@ -233,6 +235,7 @@ class StatusResult(_Model):
     atoms: list[Atom] = Field(default_factory=list)
     unassigned_count: NonNegativeInt = 0
     ambiguous_count: NonNegativeInt = 0
+    defaulted_atom_ids: list[NonEmptyString] = Field(default_factory=list)
 
 
 class AssignBatchRequest(_Model):

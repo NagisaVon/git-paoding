@@ -84,6 +84,11 @@ def render_status(result: StatusResult, *, full: bool = False) -> str:
             f"{result.ambiguous_count} ambiguous"
         ),
         f"Focus: {result.session.focus_slice or '-'}",
+        (
+            "Defaulted by focus: " + ", ".join(result.defaulted_atom_ids)
+            if result.defaulted_atom_ids
+            else "Defaulted by focus: (none)"
+        ),
         "Slices:",
     ]
     lines.extend(_slice_lines(result.slices))
@@ -125,7 +130,13 @@ def render_slice_added(result: StatusResult, *, slice_id: str, title: str) -> st
 def render_slice_removed(result: StatusResult, *, slice_id: str) -> str:
     """Render the delta from removing one slice."""
 
-    return "\n".join([f"Removed slice: {slice_id}", *_mutation_summary(result)])
+    return "\n".join(
+        [
+            f"Removed slice: {slice_id}",
+            "Its atoms are now unassigned and must be reassigned before publishing.",
+            *_mutation_summary(result),
+        ]
+    )
 
 
 def render_slice_renamed(result: StatusResult, *, slice_id: str, title: str) -> str:
@@ -189,4 +200,6 @@ def render_publish(result: PublishResult) -> str:
     for slice_ in result.slices:
         suffix = f" PR #{slice_.pr_number} {slice_.url}" if slice_.pr_number else ""
         lines.append(f"  {slice_.slice_id}  {slice_.outcome.value}{suffix}")
+    if result.status is not None and result.status.defaulted_atom_ids:
+        lines.append("Defaulted by focus: " + ", ".join(result.status.defaulted_atom_ids))
     return "\n".join(lines)

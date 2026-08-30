@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final, Sequence
 
 from git_paoding.core.model import PRRecord, PRState
-from git_paoding.github.backend import GitHubBackendError
+from git_paoding.github.backend import GitHubBackendError, PullRequestNotFoundError
 
 MINIMUM_GH_VERSION: Final = (2, 45, 0)
 _OPEN_PR_LIST_LIMIT: Final = 1000
@@ -34,7 +34,7 @@ class GhNetworkError(GhCliError):
     """Raised when GitHub cannot be reached reliably."""
 
 
-class GhNotFoundError(GhCliError):
+class GhNotFoundError(GhCliError, PullRequestNotFoundError):
     """Raised when a requested GitHub repository or pull request is absent."""
 
 

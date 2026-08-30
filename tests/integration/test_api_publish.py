@@ -7,8 +7,27 @@ from pathlib import Path
 import pytest
 
 from conftest import FakeBackend, ScratchRepoFactory, ScratchRepository
-from git_paoding.api import add_slice, assign, get_status, init_session, publish
-from git_paoding.core.model import AtomState, PRRecord, PRState, PublishOutcome
+from git_paoding.api import (
+    add_slice,
+    archive,
+    assign,
+    assign_batch,
+    get_full_status,
+    get_status,
+    init_session,
+    publish,
+    remove_slice,
+    rename_slice,
+    set_focus,
+)
+from git_paoding.core.model import (
+    AssignBatchRequest,
+    AtomState,
+    PRRecord,
+    PRState,
+    PublishOutcome,
+    SliceStatus,
+)
 from git_paoding.github.backend import DuplicatePullRequestMarkerError
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
@@ -16,7 +35,16 @@ from git_paoding.github.prbody import (
     rewrite_slice_body,
     slice_marker,
 )
-from git_paoding.gitio.plumbing import GitIdentity, commit_tree, ls_remote, update_ref
+from git_paoding.gitio.plumbing import (
+    GitIdentity,
+    TreeEntry,
+    commit_tree,
+    hash_object,
+    ls_remote,
+    ls_tree,
+    mktree,
+    update_ref,
+)
 from git_paoding.gitio.refs import generated_refs
 from git_paoding.gitio.runner import run_git
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
@@ -58,6 +86,37 @@ def _prepare_repository(
     init_session(scratch.path, "base", backend=fake_backend)
     add_slice(scratch.path, "review", "Review value change")
     return scratch, remote
+
+
+def _commit_added_root_file(
+    scratch: ScratchRepository,
+    *,
+    path: str,
+    content: bytes,
+) -> str:
+    entries = list(ls_tree(scratch.path, scratch.final_oid))
+    entries.append(
+        TreeEntry(
+            mode="100644",
+            object_type="blob",
+            oid=hash_object(scratch.path, content),
+            path=path,
+        )
+    )
+    tree_oid = mktree(scratch.path, entries)
+    identity = GitIdentity(
+        name="git-paoding tests",
+        email="git-paoding@localhost",
+        date="2000-01-01T00:00:02+00:00",
+    )
+    return commit_tree(
+        scratch.path,
+        tree_oid,
+        "Add focused change\n",
+        parents=(scratch.final_oid,),
+        author=identity,
+        committer=identity,
+    )
 
 
 def test_happy_path_second_publish_is_full_no_op(
@@ -279,8 +338,7 @@ def test_duplicate_marker_fails_publish_without_touching_slice_prs(
     with pytest.raises(DuplicatePullRequestMarkerError, match="#7, #8"):
         publish(scratch.path, backend=fake_backend)
 
-    integration_number = 9  # the only creation before the duplicate check
-    assert fake_backend.creates == [integration_number]
+    assert fake_backend.creates == []
     assert fake_backend.updates == []
 
 
@@ -321,3 +379,175 @@ def test_existing_slice_that_becomes_empty_stays_open_with_note(
     assert second.slices[0].pr_number == slice_pr_number
     assert fake_backend.prs[slice_pr_number].state is PRState.OPEN
     assert "_This slice is currently empty._" in fake_backend.prs[slice_pr_number].body
+
+
+def test_focus_defaults_new_atoms_and_publish_reports_them(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    focused = set_focus(scratch.path, "review")
+    assert focused.session.focus_slice == "review"
+
+    focused_oid = _commit_added_root_file(
+        scratch,
+        path="focused.txt",
+        content=b"one\ntwo\nthree\nfour\nfive\n",
+    )
+    update_ref(scratch.path, "refs/heads/main", focused_oid, old_oid=scratch.final_oid)
+    try:
+        status = get_status(scratch.path)
+        result = publish(scratch.path, backend=fake_backend)
+    finally:
+        update_ref(scratch.path, "refs/heads/main", scratch.final_oid, old_oid=focused_oid)
+
+    focused_atom = next(atom for atom in status.atoms if atom.path == "focused.txt")
+    assert focused_atom.owner == "review"
+    assert focused_atom.state is AtomState.ASSIGNED
+    assert status.defaulted_atom_ids == [focused_atom.atom_id]
+    assert result.action_needed is False
+    assert result.status is not None
+    assert result.status.defaulted_atom_ids == [focused_atom.atom_id]
+
+
+def test_full_status_reads_complete_authoritative_hunk_without_writing_store(
+    scratch_repo_factory: ScratchRepoFactory,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch = scratch_repo_factory(
+        {},
+        {"long.txt": "one\ntwo\nthree\nfour\nfive\n"},
+    )
+    run_git(("branch", "base", scratch.base_oid), cwd=scratch.path)
+    init_session(scratch.path, "base", backend=fake_backend)
+    session_file = JsonSessionStore(scratch.path).session_path("main")
+    stored_before = session_file.read_bytes()
+
+    short = get_status(scratch.path)
+    full = get_full_status(scratch.path)
+
+    assert short.atoms[0].preview == "+one\n+two\n+three\n…"
+    assert full.atoms[0].preview == "+one\n+two\n+three\n+four\n+five"
+    assert session_file.read_bytes() == stored_before
+
+
+def test_batch_assignment_reconciles_once_and_saves_once(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    add_slice(scratch.path, "other", "Other")
+    status = get_status(scratch.path)
+    saves = 0
+    original_save = JsonSessionStore.save
+
+    def counted_save(store: JsonSessionStore, session: object) -> None:
+        nonlocal saves
+        saves += 1
+        original_save(store, session)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(JsonSessionStore, "save", counted_save)
+    result = assign_batch(
+        scratch.path,
+        AssignBatchRequest(assignments={"other": [status.atoms[0].atom_id]}),
+    )
+
+    assert [record.owner for record in result.assigned] == ["other"]
+    assert saves == 1
+
+
+def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch = scratch_repo_factory(
+        {"shared.txt": "one\nkeep\nthree\n"},
+        {"shared.txt": "ONE\nkeep\nTHREE\n"},
+    )
+    run_git(("branch", "base", scratch.base_oid), cwd=scratch.path)
+    remote = tmp_path / "lifecycle.git"
+    run_git(("init", "--bare", "--quiet", str(remote)), cwd=tmp_path)
+    run_git(("remote", "add", "origin", str(remote)), cwd=scratch.path)
+    run_git(
+        (
+            "push",
+            "--quiet",
+            "origin",
+            "refs/heads/base:refs/heads/base",
+            "refs/heads/main:refs/heads/main",
+        ),
+        cwd=scratch.path,
+    )
+    init_session(scratch.path, "base", backend=fake_backend)
+    add_slice(scratch.path, "first", "First")
+    add_slice(scratch.path, "second", "Second")
+    atoms = get_status(scratch.path).atoms
+    assign(scratch.path, "first", [atoms[0].atom_id])
+    assign(scratch.path, "second", [atoms[1].atom_id])
+
+    initial = publish(scratch.path, backend=fake_backend)
+    first_number = initial.slices[0].pr_number
+    second_number = initial.slices[1].pr_number
+    assert first_number is not None and second_number is not None
+    assert "**Diffstat:** 1 file changed, +1 −1" in fake_backend.prs[first_number].body
+    assert f"[#{second_number} Second]" in fake_backend.prs[first_number].body
+    assert "`shared.txt`" in fake_backend.prs[first_number].body
+
+    renamed = rename_slice(scratch.path, "first", "Renamed first")
+    assert renamed.slices[0].pr_number == first_number
+    renamed_publish = publish(scratch.path, backend=fake_backend)
+    assert renamed_publish.slices[0].pr_number == first_number
+    assert fake_backend.prs[first_number].title == "[SLICE] Renamed first"
+
+    removed = remove_slice(scratch.path, "first")
+    assert removed.slices[0].status is SliceStatus.ARCHIVED
+    returned = [atom for atom in removed.atoms if atom.path == "shared.txt" and atom.owner is None]
+    assert len(returned) == 1
+    assign(scratch.path, "second", [returned[0].atom_id])
+    after_remove = publish(scratch.path, backend=fake_backend)
+    assert after_remove.slices[0].outcome is PublishOutcome.SKIPPED
+    assert fake_backend.prs[first_number].state is PRState.CLOSED
+    first_refs = generated_refs(branch_key("main"), "first")
+    assert ls_remote(scratch.path, "origin", first_refs.base, first_refs.head) == ()
+    assert "Renamed first" not in fake_backend.prs[after_remove.integration_pr or 0].body
+
+    archived = archive(scratch.path, backend=fake_backend)
+    assert archived.session.archived is True
+    assert JsonSessionStore(scratch.path).load("main").archived is True
+    assert all(slice_.status is SliceStatus.ARCHIVED for slice_ in archived.slices)
+    assert fake_backend.prs[second_number].state is PRState.CLOSED
+    assert "Archived after the integration change" in fake_backend.prs[second_number].body
+    second_refs = generated_refs(branch_key("main"), "second")
+    assert ls_remote(scratch.path, "origin", second_refs.base, second_refs.head) == ()
+
+
+def test_stale_stored_pr_number_falls_back_to_open_marker(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    first = publish(scratch.path, backend=fake_backend)
+    original_number = first.slices[0].pr_number
+    assert original_number is not None
+    store = JsonSessionStore(scratch.path)
+    session = store.load("main")
+    store.save(
+        session.model_copy(
+            update={
+                "slices": [session.slices[0].model_copy(update={"pr_number": 999})],
+            }
+        )
+    )
+
+    second = publish(scratch.path, backend=fake_backend)
+
+    assert second.slices[0].pr_number == original_number
+    assert JsonSessionStore(scratch.path).load("main").slices[0].pr_number == original_number
+    assert fake_backend.creates == [1, 2]
