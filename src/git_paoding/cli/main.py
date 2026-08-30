@@ -1,6 +1,7 @@
 """Command-line entry point."""
 
 from pathlib import Path
+from typing import NoReturn
 
 import click
 
@@ -15,7 +16,7 @@ def _backend(repo: Path) -> GhCliBackend:
     return GhCliBackend(repo)
 
 
-def _raise_cli_error(error: Exception) -> None:
+def _raise_cli_error(error: Exception) -> NoReturn:
     raise click.ClickException(str(error)) from error
 
 
