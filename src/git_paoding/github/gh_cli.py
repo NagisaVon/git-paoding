@@ -13,6 +13,7 @@ from git_paoding.core.model import PRRecord, PRState
 from git_paoding.github.backend import GitHubBackendError
 
 MINIMUM_GH_VERSION: Final = (2, 45, 0)
+_OPEN_PR_LIST_LIMIT: Final = 1000
 _PR_JSON_FIELDS: Final = "number,url,title,body,state,isDraft,baseRefName,headRefName"
 _VERSION_PATTERN: Final = re.compile(r"\bgh version (\d+)\.(\d+)\.(\d+)\b")
 
@@ -180,7 +181,12 @@ class GhCliBackend:
         return _parse_pr(payload)
 
     def list_open_prs(self) -> list[PRRecord]:
-        """List all open PRs needed for exact body-marker recovery."""
+        """List all open PRs needed for exact body-marker recovery.
+
+        Raises ``GhResponseError`` when the listing fills the request limit,
+        because a truncated listing could miss an existing marker and let a
+        publish create a duplicate slice PR.
+        """
 
         output = self._run(
             (
@@ -189,7 +195,7 @@ class GhCliBackend:
                 "--state",
                 "open",
                 "--limit",
-                "1000",
+                str(_OPEN_PR_LIST_LIMIT),
                 "--json",
                 _PR_JSON_FIELDS,
             )
@@ -197,6 +203,11 @@ class GhCliBackend:
         payload = self._load_json(output, context="gh pr list")
         if not isinstance(payload, list):
             raise GhResponseError("`gh pr list --json` returned a non-array payload")
+        if len(payload) >= _OPEN_PR_LIST_LIMIT:
+            raise GhResponseError(
+                f"This repository has {_OPEN_PR_LIST_LIMIT} or more open pull requests; "
+                "marker search over a truncated listing is unsafe. Close stale PRs first."
+            )
         return [_parse_pr(item) for item in payload]
 
     @staticmethod

@@ -35,6 +35,17 @@ def test_list_open_prs_parses_recorded_gh_json(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.unit
+def test_list_open_prs_refuses_a_truncated_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = GhCliBackend(Path("."))
+    row = (GOLDEN / "pr-view.json").read_text().strip()
+    sample = "[" + ",".join([row] * 1000) + "]"
+    monkeypatch.setattr(backend, "_run", lambda args: sample)
+
+    with pytest.raises(GhResponseError, match="1000 or more open pull requests"):
+        backend.list_open_prs()
+
+
+@pytest.mark.unit
 def test_get_pr_parses_recorded_gh_json(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = GhCliBackend(Path("."))
     sample = (GOLDEN / "pr-view.json").read_text()
