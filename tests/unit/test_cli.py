@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -25,6 +26,7 @@ from git_paoding.core.model import (
     SliceSummary,
     StatusResult,
 )
+from git_paoding.core.selectors import assign_batch_selectors
 
 
 def _status() -> StatusResult:
@@ -269,3 +271,275 @@ def test_operational_error_exits_one(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 1
     assert "Error: no session" in result.output
+
+
+@pytest.mark.unit
+def test_help_documents_public_exit_codes_and_complete_command_surface() -> None:
+    result = CliRunner().invoke(cli_main.main, ["--help"])
+
+    assert result.exit_code == 0
+    assert "0 = success/clean" in result.output
+    assert "2 = action needed" in result.output
+    assert "1 = operational error" in result.output
+    for command in ("archive", "assign", "focus", "publish", "slice", "status"):
+        assert command in result.output
+
+
+@pytest.mark.unit
+def test_status_previews_default_to_three_lines_and_full_shows_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    short_status = _status()
+    short_status.atoms[0].preview = "one\ntwo\nthree\n…"
+    full_status = _status()
+    full_status.atoms[0].preview = "one\ntwo\nthree\nfour\nfive"
+    calls: list[bool] = []
+
+    def fake_get_status(repo: Path, *, full: bool) -> StatusResult:
+        calls.append(full)
+        return full_status if full else short_status
+
+    monkeypatch.setattr(
+        cli_main,
+        "_facade",
+        SimpleNamespace(get_status=fake_get_status),
+    )
+    runner = CliRunner()
+
+    short = runner.invoke(cli_main.main, ["status"])
+    full = runner.invoke(cli_main.main, ["status", "--full"])
+
+    assert short.exit_code == full.exit_code == 2
+    assert "    three" in short.output
+    assert "    …" in short.output
+    assert "    four" not in short.output
+    assert "    four" in full.output
+    assert "    five" in full.output
+    assert calls == [False, True]
+
+
+@pytest.mark.unit
+def test_interactive_assign_passes_force_and_preserves_delta_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def fake_assign(
+        repo: Path,
+        slice_id: str,
+        selectors: Sequence[str],
+        *,
+        force: bool,
+    ) -> AssignResult:
+        calls.append((repo, slice_id, tuple(selectors), force))
+        return AssignResult(
+            assigned=[
+                AssignmentRecord(
+                    atom_id="a1",
+                    path="app.py",
+                    previous_owner="old",
+                    owner=slice_id,
+                    preview="-old\n+new",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(assign=fake_assign))
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["assign", "review", "src", "app.py:10-20", "--force"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(Path.cwd(), "review", ("src", "app.py:10-20"), True)]
+    assert "assigned a1 app.py -> review" in result.output
+    assert "-old" in result.output
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("use_stdin", [False, True])
+def test_status_json_can_feed_one_all_or_nothing_batch_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    use_stdin: bool,
+) -> None:
+    status = StatusResult(
+        session=SessionSummary(
+            canonical_branch="feature/batch",
+            base_oid="base-oid",
+            last_final_oid="final-oid",
+        ),
+        slices=[
+            SliceSummary(id="storage", title="Storage", status=SliceStatus.ACTIVE),
+            SliceSummary(id="search", title="Search", status=SliceStatus.ACTIVE),
+        ],
+        atoms=[
+            _status().atoms[0].model_copy(update={"atom_id": "a1", "path": "storage.py"}),
+            _status().atoms[0].model_copy(update={"atom_id": "a2", "path": "search.py"}),
+        ],
+        unassigned_count=2,
+    )
+    assigned_results: list[AssignResult] = []
+
+    def fake_batch(repo: Path, request: object) -> AssignResult:
+        updated, assignment = assign_batch_selectors(
+            status.atoms,
+            assignments=request.assignments,  # type: ignore[attr-defined]
+            active_slice_ids={"storage", "search"},
+            force=request.force,  # type: ignore[attr-defined]
+        )
+        assert all(atom.owner is not None for atom in updated)
+        assigned_results.append(assignment)
+        return assignment
+
+    monkeypatch.setattr(
+        cli_main,
+        "_facade",
+        SimpleNamespace(
+            get_status=lambda repo, full: status,
+            assign_batch=fake_batch,
+        ),
+    )
+    runner = CliRunner()
+    status_result = runner.invoke(cli_main.main, ["status", "--json"])
+    payload = json.loads(status_result.output)
+    plan = {
+        "contract_version": 0,
+        "assignments": {
+            "storage": [payload["atoms"][0]["atom_id"]],
+            "search": [payload["atoms"][1]["atom_id"]],
+        },
+        "force": False,
+    }
+    plan_text = json.dumps(plan)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(plan_text, encoding="utf-8")
+    arguments = ["assign", "--batch", "-" if use_stdin else str(plan_path)]
+
+    assign_result = runner.invoke(
+        cli_main.main,
+        arguments,
+        input=plan_text if use_stdin else None,
+    )
+
+    assert status_result.exit_code == 2
+    assert assign_result.exit_code == 0
+    assert len(assigned_results) == 1
+    assert [record.atom_id for record in assigned_results[0].assigned] == ["a1", "a2"]
+    assert "assigned a1 storage.py -> storage" in assign_result.output
+    assert "assigned a2 search.py -> search" in assign_result.output
+
+
+@pytest.mark.unit
+def test_batch_cli_rejects_mixed_modes_before_facade_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    called = False
+
+    def fake_batch(repo: Path, request: object) -> AssignResult:
+        nonlocal called
+        called = True
+        return AssignResult()
+
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 0,
+                "assignments": {"review": ["deadbeef"]},
+                "force": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(assign_batch=fake_batch))
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["assign", "review", "--batch", str(plan_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "cannot be combined" in result.output
+    assert called is False
+
+
+@pytest.mark.unit
+def test_slice_crud_focus_and_archive_render_only_mutation_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = _status().model_copy(
+        update={
+            "slices": [
+                SliceSummary(id="review", title="Review", status=SliceStatus.ACTIVE),
+            ]
+        }
+    )
+    archived = active.model_copy(
+        update={
+            "slices": [
+                SliceSummary(id="review", title="Review", status=SliceStatus.ARCHIVED),
+            ]
+        }
+    )
+    calls: list[tuple[object, ...]] = []
+
+    def remove_slice(repo: Path, slice_id: str) -> StatusResult:
+        calls.append(("remove", slice_id))
+        return active.model_copy(update={"slices": []})
+
+    def rename_slice(repo: Path, slice_id: str, title: str) -> StatusResult:
+        calls.append(("rename", slice_id, title))
+        return active
+
+    def set_focus(repo: Path, slice_id: str | None) -> StatusResult:
+        calls.append(("focus", slice_id))
+        return active
+
+    def archive(repo: Path, *, backend: object, remote: str) -> StatusResult:
+        calls.append(("archive", remote, backend))
+        return archived
+
+    facade = SimpleNamespace(
+        list_slices=lambda repo: active,
+        remove_slice=remove_slice,
+        rename_slice=rename_slice,
+        set_focus=set_focus,
+        archive=archive,
+    )
+    backend = object()
+    monkeypatch.setattr(cli_main, "_facade", facade)
+    monkeypatch.setattr(cli_main, "_backend", lambda repo: backend)
+    runner = CliRunner()
+
+    listed = runner.invoke(cli_main.main, ["slice", "list"])
+    removed = runner.invoke(cli_main.main, ["slice", "remove", "review"])
+    renamed = runner.invoke(
+        cli_main.main,
+        ["slice", "rename", "review", "--title", "Renamed"],
+    )
+    focused = runner.invoke(cli_main.main, ["focus", "review"])
+    cleared = runner.invoke(cli_main.main, ["focus", "--clear"])
+    archive_result = runner.invoke(cli_main.main, ["archive", "--remote", "upstream"])
+
+    assert all(
+        result.exit_code == 0
+        for result in (listed, removed, renamed, focused, cleared, archive_result)
+    )
+    assert "review  active  0 files +0 -0" in listed.output
+    assert "app.py" not in listed.output
+    assert "Removed slice: review" in removed.output
+    assert "Renamed slice: review" in renamed.output
+    assert "Focus: review" in focused.output
+    assert "Focus: cleared" in cleared.output
+    assert "Archived session: main" in archive_result.output
+    assert all("a1 app.py" not in result.output for result in (removed, renamed, focused, cleared))
+    assert calls == [
+        ("remove", "review"),
+        ("rename", "review", "Renamed"),
+        ("focus", "review"),
+        ("focus", None),
+        ("archive", "upstream", backend),
+    ]
