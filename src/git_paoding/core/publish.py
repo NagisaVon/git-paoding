@@ -28,7 +28,7 @@ from git_paoding.core.model import (
 )
 from git_paoding.core.projection import build_projection
 from git_paoding.core.reconcile import reconcile
-from git_paoding.github.backend import GitHubBackend, find_open_pr_by_marker
+from git_paoding.github.backend import DuplicatePullRequestMarkerError, GitHubBackend
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
     rewrite_integration_body,
@@ -177,8 +177,11 @@ def _upsert_slice_pr(
     marker = slice_marker(slice_id)
     matches = [pr for pr in open_prs if marker in pr.body]
     if len(matches) > 1:
-        find_open_pr_by_marker(backend, marker)  # raises the canonical duplicate error
-        raise AssertionError("duplicate marker validation unexpectedly returned")
+        numbers = ", ".join(f"#{pr.number}" for pr in matches)
+        raise DuplicatePullRequestMarkerError(
+            f"Multiple open pull requests contain marker {marker!r}: {numbers}. "
+            "Close or repair the duplicate before publishing."
+        )
     existing = matches[0] if matches else None
     desired_title = f"[SLICE] {title}"
 

@@ -9,6 +9,7 @@ import pytest
 from conftest import FakeBackend, ScratchRepoFactory, ScratchRepository
 from git_paoding.api import add_slice, assign, get_status, init_session, publish
 from git_paoding.core.model import AtomState, PRRecord, PRState, PublishOutcome
+from git_paoding.github.backend import DuplicatePullRequestMarkerError
 from git_paoding.github.prbody import (
     HUMAN_NARRATIVE_SCAFFOLD,
     INTEGRATION_MARKER,
@@ -212,6 +213,35 @@ def test_publish_recovers_slice_pr_identity_from_marker(
     assert fake_backend.creates == [41]  # integration only; slice #40 was adopted
     assert fake_backend.updates == [40, 41]
     assert JsonSessionStore(scratch.path).load("main").slices[0].pr_number == 40
+
+
+def test_duplicate_marker_fails_publish_without_touching_slice_prs(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    for number in (7, 8):
+        fake_backend.seed(
+            PRRecord(
+                number=number,
+                url=f"https://example.test/pulls/{number}",
+                title="[SLICE] Review value change",
+                body=f"Human prose\n\n{slice_marker('review')}",
+                state=PRState.OPEN,
+                is_draft=True,
+                base_ref="generated/base",
+                head_ref="generated/head",
+            )
+        )
+
+    with pytest.raises(DuplicatePullRequestMarkerError, match="#7, #8"):
+        publish(scratch.path, backend=fake_backend)
+
+    integration_number = 9  # the only creation before the duplicate check
+    assert fake_backend.creates == [integration_number]
+    assert fake_backend.updates == []
 
 
 def test_existing_slice_that_becomes_empty_stays_open_with_note(
