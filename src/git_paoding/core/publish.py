@@ -108,6 +108,9 @@ def _short_ref(ref: str) -> str:
 
 
 def _integration_base_ref(session: Session, remote: str) -> str:
+    # Assumes the session's base ref names a branch, plain or as
+    # ``<remote>/<branch>`` for this publish remote; any other init --base
+    # form (an OID, a tag, another remote) fails loudly at gh pr create.
     base_ref = session.base_ref or session.base_oid
     remote_prefix = f"{remote}/"
     if base_ref.startswith(remote_prefix):
