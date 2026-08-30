@@ -102,7 +102,7 @@ def test_create_draft_pr_uses_recorded_create_and_view_shapes(
     monkeypatch.setattr(backend, "_run", fake_run)
 
     record = backend.create_draft_pr(
-        title="[SLICE] Storage",
+        title="[slice] Storage",
         body="body",
         base_ref="paoding/feature-a/storage/base",
         head_ref="paoding/feature-a/storage/head",
@@ -119,7 +119,7 @@ def test_create_draft_pr_uses_recorded_create_and_view_shapes(
             "--head",
             "paoding/feature-a/storage/head",
             "--title",
-            "[SLICE] Storage",
+            "[slice] Storage",
             "--body",
             "body",
         ),
@@ -145,7 +145,7 @@ def test_update_pr_uses_edit_then_recorded_json_view(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(backend, "_run", fake_run)
 
-    record = backend.update_pr(41, title="[SLICE] Storage", body="new body")
+    record = backend.update_pr(41, title="[slice] Storage", body="new body")
 
     assert record.number == 41
     assert seen[0] == (
@@ -153,7 +153,7 @@ def test_update_pr_uses_edit_then_recorded_json_view(monkeypatch: pytest.MonkeyP
         "edit",
         "41",
         "--title",
-        "[SLICE] Storage",
+        "[slice] Storage",
         "--body",
         "new body",
     )

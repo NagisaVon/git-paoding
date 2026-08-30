@@ -48,12 +48,23 @@ def main() -> None:
 
 @main.command("init")
 @click.option("--base", required=True, help="Base ref to pin for this review session.")
-def init_command(base: str) -> None:
+@click.option(
+    "--slice-prefix",
+    default="slice",
+    show_default=True,
+    help="Short identifier used in generated slice pull-request titles.",
+)
+def init_command(base: str, slice_prefix: str) -> None:
     """Initialize a review session on the current branch."""
 
     repo = Path.cwd()
     try:
-        result = _facade.init_session(repo, base, backend=_backend(repo))
+        result = _facade.init_session(
+            repo,
+            base,
+            backend=_backend(repo),
+            slice_pr_prefix=slice_prefix,
+        )
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
     click.echo(render_status(result))

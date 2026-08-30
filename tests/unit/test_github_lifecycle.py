@@ -12,7 +12,7 @@ from git_paoding.github.lifecycle import (
     remove_slice_pr,
     rename_slice_pr,
 )
-from git_paoding.github.prbody import HUMAN_NARRATIVE_SCAFFOLD, rewrite_slice_body
+from git_paoding.github.prbody import rewrite_slice_body
 
 
 def _seed_slice(backend: FakeBackend, *, number: int = 41) -> None:
@@ -20,9 +20,9 @@ def _seed_slice(backend: FakeBackend, *, number: int = 41) -> None:
         PRRecord(
             number=number,
             url=f"https://github.com/example/project/pull/{number}",
-            title="[SLICE] Old title",
+            title="[slice] Old title",
             body=rewrite_slice_body(
-                HUMAN_NARRATIVE_SCAFFOLD,
+                "",
                 slice_id="storage",
                 integration_pr_url="https://github.com/example/project/pull/40",
                 diffstat=DiffStat(files_changed=1, additions=2, deletions=1),
@@ -39,10 +39,7 @@ def _seed_slice(backend: FakeBackend, *, number: int = 41) -> None:
 def test_rename_updates_title_and_body_on_the_same_pr() -> None:
     backend = FakeBackend()
     _seed_slice(backend)
-    original_body = backend.prs[41].body.replace(
-        HUMAN_NARRATIVE_SCAFFOLD,
-        "Human-authored narrative.  \nDo not rewrite this.",
-    )
+    original_body = "Human-authored narrative.  \nDo not rewrite this.\n\n" + backend.prs[41].body
     backend.prs[41] = backend.prs[41].model_copy(update={"body": original_body})
 
     result = rename_slice_pr(
@@ -50,12 +47,13 @@ def test_rename_updates_title_and_body_on_the_same_pr() -> None:
         41,
         slice_id="storage",
         title="Storage abstraction",
+        prefix="ABC-123",
         integration_pr_url="https://github.com/example/project/pull/40",
         diffstat=DiffStat(files_changed=2, additions=4, deletions=1),
     )
 
     assert result.number == 41
-    assert result.title == "[SLICE] Storage abstraction"
+    assert result.title == "[ABC-123] Storage abstraction"
     assert result.body.startswith("Human-authored narrative.  \nDo not rewrite this.")
     assert "**Diffstat:** 2 files changed, +4 −1" in result.body
     assert backend.updates == [41]

@@ -74,7 +74,7 @@ base is pinned when the session is initialized; moving `origin/main` later does
 not silently move that pin.
 
 ```bash
-git-paoding init --base origin/main
+git-paoding init --base origin/main --slice-prefix ABC-123
 git-paoding slice add storage --title "Storage boundary"
 git-paoding slice add tests --title "Storage behavior tests"
 git-paoding status --json
@@ -84,6 +84,10 @@ git-paoding status --json
 unassigned or ambiguous atoms. Its JSON includes each atom's ID, path, Base and
 Final ranges, owner, state, and short preview. Use `git-paoding status --full`
 when complete changed-hunk previews are useful.
+
+`--slice-prefix` is optional and defaults to `slice`. It changes only generated
+slice PR titles, such as `[ABC-123] Storage boundary`; slice IDs and generated
+refs remain stable. The integration PR title is the canonical branch name.
 
 Assign interactively by an atom ID, path, directory, glob, or Final-coordinate
 line range. Broad selectors preserve already-owned atoms unless `--force` is
@@ -208,8 +212,9 @@ PR.
   session and the same stable slice IDs; attribution returns as unassigned,
   while existing open slice PRs can be adopted by their machine markers on the
   next clean publish.
-- Machine-managed PR-body regions can be refreshed. Human narrative outside
-  those delimiters is preserved.
+- New PR bodies contain only their machine-managed region; the tool does not
+  seed a narrative template. Human narrative added outside those delimiters is
+  preserved byte-for-byte on refresh.
 
 After GitHub reports the integration PR as merged, archive the generated review
 surface without merging any slice PR:

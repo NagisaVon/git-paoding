@@ -33,7 +33,8 @@ throughout.
   belong to the integration PR.
 - Do not require slice-level CI or independent buildability. Cross-slice
   dependencies are valid.
-- Preserve human-written PR narrative outside machine-managed regions.
+- New PR bodies contain no narrative template. Preserve human-written PR
+  narrative outside machine-managed regions byte-for-byte.
 
 The operating rule is: **run `git-paoding publish` and do what it says**.
 Publication is idempotent and self-checking; there is no separate refresh
@@ -70,10 +71,14 @@ the Git remote. Do not push a branch without the author's authorization.
 
 ```bash
 gh auth status
-git-paoding init --base origin/main
+git-paoding init --base origin/main --slice-prefix ABC-123
 git-paoding slice add storage --title "Storage boundary"
 git-paoding slice add tests --title "Storage behavior tests"
 ```
+
+Omit `--slice-prefix` to use `slice`. The prefix changes only slice PR titles;
+it does not change stable slice IDs or generated refs. The integration PR title
+is exactly the canonical branch name.
 
 The base is pinned to a commit at initialization. Choose the real integration
 target; do not silently change it later.

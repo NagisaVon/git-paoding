@@ -39,7 +39,6 @@ from git_paoding.github.lifecycle import (
     rename_slice_pr,
 )
 from git_paoding.github.prbody import (
-    HUMAN_NARRATIVE_SCAFFOLD,
     IntegrationSliceLink,
     RelatedSliceLink,
     rewrite_integration_body,
@@ -145,6 +144,7 @@ def status_from_session(
             canonical_branch=session.canonical_branch,
             base_ref=session.base_ref,
             base_oid=session.base_oid,
+            slice_pr_prefix=session.slice_pr_prefix,
             last_final_oid=session.last_final_oid,
             focus_slice=session.focus_slice,
             integration_pr=session.integration_pr,
@@ -176,7 +176,7 @@ def _integration_base_ref(session: Session, remote: str) -> str:
 
 
 def _integration_title(session: Session) -> str:
-    return f"[INTEGRATION] {session.canonical_branch}"
+    return session.canonical_branch
 
 
 def _find_integration_pr(
@@ -220,7 +220,7 @@ def _ensure_integration_pr(
     if existing is not None:
         return existing
 
-    initial_body = rewrite_integration_body(HUMAN_NARRATIVE_SCAFFOLD, slices=[])
+    initial_body = rewrite_integration_body("", slices=[])
     return backend.create_draft_pr(
         title=_integration_title(session),
         body=initial_body,
@@ -433,9 +433,9 @@ def publish_session(
             if prepared is None:
                 raise PublishError(f"Missing prepared projection for non-empty slice {slice_.id!r}")
             created = backend.create_draft_pr(
-                title=f"[SLICE] {slice_.title}",
+                title=f"[{session.slice_pr_prefix}] {slice_.title}",
                 body=rewrite_slice_body(
-                    HUMAN_NARRATIVE_SCAFFOLD,
+                    "",
                     slice_id=slice_.id,
                     integration_pr_url=integration_pr.url,
                     diffstat=_slice_diffstat(session, slice_.id),
@@ -459,6 +459,7 @@ def publish_session(
                 existing.number,
                 slice_id=slice_.id,
                 title=slice_.title,
+                prefix=session.slice_pr_prefix,
                 integration_pr_url=integration_pr.url,
                 diffstat=_slice_diffstat(session, slice_.id),
                 related_slices=_related_links(session, slice_id=slice_.id, prs=resolved_prs),

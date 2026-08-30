@@ -596,12 +596,10 @@ def test_regression_artifacts_and_contract_review_are_pinned() -> None:
     ):
         assert (GOLDEN_ROOT / "github" / filename).read_text(encoding="utf-8")
 
-    candidates = (
-        Path(__file__).with_name("narrative-template-candidates.md").read_text(encoding="utf-8")
-    )
-    assert all(f"Candidate {label}" in candidates for label in ("A", "B", "C"))
-    assert "<!-- paoding-managed:start -->" in candidates
-    assert "<!-- paoding-managed:end -->" in candidates
+    policy = Path(__file__).with_name("narrative-policy.md").read_text(encoding="utf-8")
+    assert "does not seed headings, prose prompts, checklists" in policy
+    assert "preserves those outside bytes exactly" in policy
+    assert "managed integration region retains only the slice index" in policy
 
 
 def test_traceability_manifest_is_complete() -> None:

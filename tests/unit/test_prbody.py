@@ -8,7 +8,6 @@ import pytest
 
 from git_paoding.core.model import DiffStat
 from git_paoding.github.prbody import (
-    HUMAN_NARRATIVE_SCAFFOLD,
     INTEGRATION_MARKER,
     MACHINE_REGION_END,
     MACHINE_REGION_START,
@@ -53,7 +52,7 @@ def test_slice_body_rewrite_matches_golden_and_preserves_human_bytes() -> None:
 @pytest.mark.unit
 def test_fresh_slice_body_matches_complete_golden() -> None:
     actual = rewrite_slice_body(
-        HUMAN_NARRATIVE_SCAFFOLD,
+        "",
         slice_id="storage",
         integration_pr_url="https://github.com/example/project/pull/40",
         diffstat=DiffStat(files_changed=3, additions=12, deletions=4),
@@ -73,7 +72,7 @@ def test_fresh_slice_body_matches_complete_golden() -> None:
 @pytest.mark.unit
 def test_empty_slice_body_matches_golden() -> None:
     actual = rewrite_slice_body(
-        HUMAN_NARRATIVE_SCAFFOLD,
+        "",
         slice_id="later",
         integration_pr_url="https://github.com/example/project/pull/40",
         diffstat=DiffStat(),
@@ -84,18 +83,15 @@ def test_empty_slice_body_matches_golden() -> None:
 
 
 @pytest.mark.unit
-def test_human_scaffold_lists_every_narrative_field() -> None:
-    for field in (
-        "Problem",
-        "Why this change is needed",
-        "What changed",
-        "Design choices",
-        "Testing",
-        "Risks",
-        "Rollback",
-        "Dependencies and context involving other slices",
-    ):
-        assert field in HUMAN_NARRATIVE_SCAFFOLD
+def test_fresh_body_contains_only_the_machine_managed_region() -> None:
+    actual = rewrite_slice_body(
+        "",
+        slice_id="storage",
+        integration_pr_url="https://github.com/example/project/pull/40",
+    )
+
+    assert actual.startswith(MACHINE_REGION_START)
+    assert actual.endswith(MACHINE_REGION_END)
 
 
 @pytest.mark.unit

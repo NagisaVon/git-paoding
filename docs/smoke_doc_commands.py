@@ -222,7 +222,11 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     git(["push", "-u", "origin", "HEAD"], cwd=repository, env=env)
 
     run([*command, "--help"], cwd=repository, env=env)
-    run([*command, "init", "--base", "origin/main"], cwd=repository, env=env)
+    run(
+        [*command, "init", "--base", "origin/main", "--slice-prefix", "ABC-123"],
+        cwd=repository,
+        env=env,
+    )
     run(
         [*command, "slice", "add", "storage", "--title", "Storage boundary"],
         cwd=repository,
@@ -237,6 +241,8 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     payload = json.loads(status.stdout)
     if payload["unassigned_count"] != 2:
         raise RuntimeError(f"expected two unassigned atoms, got {payload!r}")
+    if payload["session"]["slice_pr_prefix"] != "ABC-123":
+        raise RuntimeError(f"slice title prefix was not persisted: {payload!r}")
     run([*command, "status", "--full"], cwd=repository, env=env, expected=2)
 
     run([*command, "assign", "storage", "src/storage.py"], cwd=repository, env=env)
@@ -246,6 +252,19 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     first_payload = json.loads(first.stdout)
     if first_payload["action_needed"] or len(first_payload["slices"]) != 2:
         raise RuntimeError(f"unexpected first publish result: {first_payload!r}")
+    fake_state = load_fake_state(Path(env["PAODING_FAKE_GH_STATE"]))
+    integration_pr = next(
+        pr
+        for pr in fake_state["prs"]
+        if pr["headRefName"] == "feature/review" and "paoding-slice-id" not in pr["body"]
+    )
+    slice_prs = [pr for pr in fake_state["prs"] if "paoding-slice-id" in pr["body"]]
+    if integration_pr["title"] != "feature/review":
+        raise RuntimeError(f"unexpected integration PR title: {integration_pr!r}")
+    if not all(pr["title"].startswith("[ABC-123] ") for pr in slice_prs):
+        raise RuntimeError(f"unexpected slice PR titles: {slice_prs!r}")
+    if not all(pr["body"].startswith("<!-- paoding-managed:start -->") for pr in fake_state["prs"]):
+        raise RuntimeError(f"new PR bodies must begin with the managed region: {fake_state!r}")
     second = run([*command, "publish", "--json"], cwd=repository, env=env)
     second_payload = json.loads(second.stdout)
     if {item["outcome"] for item in second_payload["slices"]} != {"no-op"}:

@@ -107,8 +107,14 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
         calls.append(("backend", repo))
         return backend
 
-    def fake_init(repo: Path, base: str, *, backend: object) -> StatusResult:
-        calls.append(("init", repo, base, backend))
+    def fake_init(
+        repo: Path,
+        base: str,
+        *,
+        backend: object,
+        slice_pr_prefix: str,
+    ) -> StatusResult:
+        calls.append(("init", repo, base, backend, slice_pr_prefix))
         return status
 
     def fake_add(repo: Path, slice_id: str, title: str) -> StatusResult:
@@ -144,7 +150,10 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
     monkeypatch.setattr(facade_api, "assign", fake_assign)
     runner = CliRunner()
 
-    init_result = runner.invoke(cli_main.main, ["init", "--base", "origin/main"])
+    init_result = runner.invoke(
+        cli_main.main,
+        ["init", "--base", "origin/main", "--slice-prefix", "ABC-123"],
+    )
     add_result = runner.invoke(
         cli_main.main,
         ["slice", "add", "storage", "--title", "Storage"],
@@ -154,7 +163,7 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
     assert init_result.exit_code == add_result.exit_code == assign_result.exit_code == 0
     assert calls == [
         ("backend", Path.cwd()),
-        ("init", Path.cwd(), "origin/main", backend),
+        ("init", Path.cwd(), "origin/main", backend, "ABC-123"),
         ("add", Path.cwd(), "storage", "Storage"),
         ("assign", Path.cwd(), "storage", ("a1", "app.py")),
     ]

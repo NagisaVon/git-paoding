@@ -80,6 +80,7 @@ def init_session(
     *,
     backend: GitHubBackend,
     canonical_branch: str | None = None,
+    slice_pr_prefix: str = "slice",
 ) -> StatusResult:
     """Pin ``base`` and initialize a session for the canonical branch."""
 
@@ -99,6 +100,7 @@ def init_session(
             canonical_branch=branch,
             base_ref=base,
             base_oid=base_oid,
+            slice_pr_prefix=slice_pr_prefix,
         )
         session, _replay_atoms, status = reconcile_and_status(repository, session)
         store.save(session)

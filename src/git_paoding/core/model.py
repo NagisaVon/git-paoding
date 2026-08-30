@@ -19,6 +19,10 @@ NonEmptyString = Annotated[str, Field(min_length=1)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
 SliceId = Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+SlicePrPrefix = Annotated[
+    str,
+    Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9._/-]+$"),
+]
 
 
 class PaodingError(RuntimeError):
@@ -154,6 +158,7 @@ class Session(_Model):
     canonical_branch: NonEmptyString
     base_ref: NonEmptyString | None = None
     base_oid: NonEmptyString
+    slice_pr_prefix: SlicePrPrefix = "slice"
     slices: list[Slice] = Field(default_factory=list)
     atoms: list[Atom] = Field(default_factory=list)
     last_final_oid: NonEmptyString | None = None
@@ -211,6 +216,7 @@ class SessionSummary(_Model):
     canonical_branch: NonEmptyString
     base_ref: NonEmptyString | None = None
     base_oid: NonEmptyString
+    slice_pr_prefix: SlicePrPrefix = "slice"
     last_final_oid: NonEmptyString | None = None
     focus_slice: SliceId | None = None
     integration_pr: PositiveInt | None = None

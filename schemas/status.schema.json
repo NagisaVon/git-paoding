@@ -202,6 +202,14 @@
           ],
           "default": null,
           "title": "Last Final Oid"
+        },
+        "slice_pr_prefix": {
+          "default": "slice",
+          "maxLength": 40,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "title": "Slice Pr Prefix",
+          "type": "string"
         }
       },
       "required": [

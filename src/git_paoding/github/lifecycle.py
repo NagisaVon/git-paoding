@@ -44,6 +44,7 @@ def rename_slice_pr(
     *,
     slice_id: SliceId | str,
     title: str,
+    prefix: str = "slice",
     integration_pr_url: str,
     diffstat: DiffStat,
     related_slices: Sequence[RelatedSliceLink] = (),
@@ -64,7 +65,7 @@ def rename_slice_pr(
     return _update_if_changed(
         backend,
         current,
-        title=f"[SLICE] {title}",
+        title=f"[{prefix}] {title}",
         body=desired_body,
     )
 

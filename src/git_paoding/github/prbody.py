@@ -21,21 +21,6 @@ LIFECYCLE_REGION_END = "<!-- paoding-lifecycle:end -->"
 SLICE_MARKER_PREFIX = "<!-- paoding-slice-id: "
 INTEGRATION_MARKER = "<!-- paoding-integration-pr -->"
 
-HUMAN_NARRATIVE_SCAFFOLD = """<!--
-Add the human review narrative here. Cover the fields that apply:
-
-- Problem
-- Why this change is needed
-- What changed
-- Design choices
-- Testing
-- Risks
-- Rollback
-- Dependencies and context involving other slices
-
-This section is author-controlled and will be preserved on refresh.
--->"""
-
 DO_NOT_MERGE_BANNER = (
     "> [!CAUTION]\n"
     "> **DO NOT MERGE — review projection only.** Final CI, approval, and merge belong to "

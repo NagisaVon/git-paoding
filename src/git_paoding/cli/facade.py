@@ -30,7 +30,14 @@ class FacadeUnavailableError(PaodingError):
 class CliFacade(Protocol):
     """Facade calls consumed by the complete CLI surface."""
 
-    def init_session(self, repo: Path, base: str, *, backend: GitHubBackend) -> StatusResult: ...
+    def init_session(
+        self,
+        repo: Path,
+        base: str,
+        *,
+        backend: GitHubBackend,
+        slice_pr_prefix: str = "slice",
+    ) -> StatusResult: ...
 
     def add_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult: ...
 
@@ -84,8 +91,15 @@ def _integration_hook(name: str) -> object:
 class ApiFacade:
     """Default adapter over :mod:`git_paoding.api`."""
 
-    def init_session(self, repo: Path, base: str, *, backend: GitHubBackend) -> StatusResult:
-        return api.init_session(repo, base, backend=backend)
+    def init_session(
+        self,
+        repo: Path,
+        base: str,
+        *,
+        backend: GitHubBackend,
+        slice_pr_prefix: str = "slice",
+    ) -> StatusResult:
+        return api.init_session(repo, base, backend=backend, slice_pr_prefix=slice_pr_prefix)
 
     def add_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult:
         return api.add_slice(repo, slice_id, title)

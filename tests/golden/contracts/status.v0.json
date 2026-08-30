@@ -4,6 +4,7 @@
     "canonical_branch": "feature/cp2",
     "base_ref": "origin/main",
     "base_oid": "1111111111111111111111111111111111111111",
+    "slice_pr_prefix": "slice",
     "last_final_oid": "2222222222222222222222222222222222222222",
     "focus_slice": null,
     "integration_pr": 41,

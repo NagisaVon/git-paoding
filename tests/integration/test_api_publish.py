@@ -32,8 +32,9 @@ from git_paoding.core.publish import PublishError
 from git_paoding.github.backend import DuplicatePullRequestMarkerError
 from git_paoding.github.lifecycle import MergedSlicePullRequestError
 from git_paoding.github.prbody import (
-    HUMAN_NARRATIVE_SCAFFOLD,
     INTEGRATION_MARKER,
+    MACHINE_REGION_END,
+    MACHINE_REGION_START,
     rewrite_slice_body,
     slice_marker,
 )
@@ -156,6 +157,12 @@ def test_happy_path_second_publish_is_full_no_op(
     integration_pr = fake_backend.prs[first.integration_pr]
     assert slice_pr.is_draft is True
     assert integration_pr.is_draft is True
+    assert slice_pr.title == "[slice] Review value change"
+    assert integration_pr.title == "main"
+    assert slice_pr.body.startswith(MACHINE_REGION_START)
+    assert slice_pr.body.endswith(MACHINE_REGION_END)
+    assert integration_pr.body.startswith(MACHINE_REGION_START)
+    assert integration_pr.body.endswith(MACHINE_REGION_END)
     assert slice_marker("review") in slice_pr.body
     assert slice_pr.base_ref == refs.base.removeprefix("refs/heads/")
     assert slice_pr.head_ref == refs.head.removeprefix("refs/heads/")
@@ -258,9 +265,9 @@ def test_publish_recovers_slice_pr_identity_from_marker(
         PRRecord(
             number=40,
             url="https://example.test/pulls/40",
-            title="[SLICE] Old title",
+            title="Title recovery must not depend on this value",
             body=rewrite_slice_body(
-                HUMAN_NARRATIVE_SCAFFOLD,
+                "",
                 slice_id="review",
                 integration_pr_url="https://example.test/pulls/old",
             ),
@@ -277,6 +284,7 @@ def test_publish_recovers_slice_pr_identity_from_marker(
     assert result.slices[0].outcome is PublishOutcome.REFRESHED
     assert fake_backend.creates == [41]  # integration only; slice #40 was adopted
     assert fake_backend.updates == [40, 41]
+    assert fake_backend.prs[40].title == "[slice] Review value change"
     assert JsonSessionStore(scratch.path).load("main").slices[0].pr_number == 40
 
 
@@ -297,7 +305,7 @@ def test_publish_adopts_marker_from_damaged_body_and_heals_by_appending(
         PRRecord(
             number=40,
             url="https://example.test/pulls/40",
-            title="[SLICE] Old title",
+            title="Unrelated old title",
             body=damaged_body,
             state=PRState.OPEN,
             is_draft=True,
@@ -328,7 +336,7 @@ def test_duplicate_marker_fails_publish_without_touching_slice_prs(
             PRRecord(
                 number=number,
                 url=f"https://example.test/pulls/{number}",
-                title="[SLICE] Review value change",
+                title="Duplicate marker identity",
                 body=f"Human prose\n\n{slice_marker('review')}",
                 state=PRState.OPEN,
                 is_draft=True,
@@ -485,7 +493,14 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
         ),
         cwd=scratch.path,
     )
-    init_session(scratch.path, "base", backend=fake_backend)
+    init_session(
+        scratch.path,
+        "base",
+        backend=fake_backend,
+        slice_pr_prefix="ABC-123",
+    )
+    assert JsonSessionStore(scratch.path).load("main").slice_pr_prefix == "ABC-123"
+    assert get_status(scratch.path).session.slice_pr_prefix == "ABC-123"
     add_slice(scratch.path, "first", "First")
     add_slice(scratch.path, "second", "Second")
     atoms = get_status(scratch.path).atoms
@@ -496,6 +511,8 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     first_number = initial.slices[0].pr_number
     second_number = initial.slices[1].pr_number
     assert first_number is not None and second_number is not None
+    assert fake_backend.prs[first_number].title == "[ABC-123] First"
+    assert fake_backend.prs[initial.integration_pr or 0].title == "main"
     assert "**Diffstat:** 1 file changed, +1 −1" in fake_backend.prs[first_number].body
     assert f"[#{second_number} Second]" in fake_backend.prs[first_number].body
     assert "`shared.txt`" in fake_backend.prs[first_number].body
@@ -504,7 +521,7 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     assert renamed.slices[0].pr_number == first_number
     renamed_publish = publish(scratch.path, backend=fake_backend)
     assert renamed_publish.slices[0].pr_number == first_number
-    assert fake_backend.prs[first_number].title == "[SLICE] Renamed first"
+    assert fake_backend.prs[first_number].title == "[ABC-123] Renamed first"
 
     removed = remove_slice(scratch.path, "first")
     assert removed.slices[0].status is SliceStatus.ARCHIVED
@@ -515,6 +532,8 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     assert after_remove.slices[0].outcome is PublishOutcome.SKIPPED
     assert fake_backend.prs[first_number].state is PRState.CLOSED
     first_refs = generated_refs(branch_key("main"), "first")
+    assert "ABC-123" not in first_refs.base
+    assert "ABC-123" not in first_refs.head
     assert ls_remote(scratch.path, "origin", first_refs.base, first_refs.head) == ()
     assert "Renamed first" not in fake_backend.prs[after_remove.integration_pr or 0].body
 
