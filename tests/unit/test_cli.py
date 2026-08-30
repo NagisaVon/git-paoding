@@ -21,6 +21,8 @@ from git_paoding.core.model import (
     PaodingError,
     PublishResult,
     SessionSummary,
+    SliceStatus,
+    SliceSummary,
     StatusResult,
 )
 
@@ -109,7 +111,17 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
 
     def fake_add(repo: Path, slice_id: str, title: str) -> StatusResult:
         calls.append(("add", repo, slice_id, title))
-        return status
+        return status.model_copy(
+            update={
+                "slices": [
+                    SliceSummary(
+                        id=slice_id,
+                        title=title,
+                        status=SliceStatus.ACTIVE,
+                    )
+                ]
+            }
+        )
 
     def fake_assign(repo: Path, slice_id: str, selectors: Sequence[str]) -> AssignResult:
         calls.append(("assign", repo, slice_id, tuple(selectors)))
@@ -146,6 +158,68 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
     ]
     assert "assigned a1 app.py -> storage" in assign_result.output
     assert "-old" in assign_result.output
+    assert "Added slice: storage" in add_result.output
+    assert "Title: Storage" in add_result.output
+    assert "Slices: 1 active" in add_result.output
+    assert "Action needed: 1 unassigned, 0 ambiguous" in add_result.output
+    assert "Atoms:" not in add_result.output
+    assert "a1 app.py" not in add_result.output
+
+
+@pytest.mark.unit
+def test_slice_add_renders_delta_not_large_atom_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    atoms = [
+        Atom(
+            atom_id=f"atom-{index}",
+            path=f"src/file_{index}.py",
+            kind=AtomKind.MODIFY,
+            base_start=index,
+            base_len=1,
+            final_start=index,
+            final_len=1,
+            content_hash=f"hash-{index}",
+            state=AtomState.UNASSIGNED,
+            preview=f"+change {index}",
+        )
+        for index in range(163)
+    ]
+    status = StatusResult(
+        session=SessionSummary(
+            canonical_branch="feature/large-change",
+            base_oid="base-oid",
+            last_final_oid="final-oid",
+        ),
+        slices=[
+            SliceSummary(
+                id="geometry",
+                title="Mask geometry",
+                status=SliceStatus.ACTIVE,
+            )
+        ],
+        atoms=atoms,
+        unassigned_count=len(atoms),
+    )
+
+    monkeypatch.setattr(facade_api, "add_slice", lambda *args, **kwargs: status)
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["slice", "add", "geometry", "--title", "Mask geometry"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.splitlines() == [
+        "Added slice: geometry",
+        "Title: Mask geometry",
+        "Session: feature/large-change",
+        "Slices: 1 active",
+        "Action needed: 163 unassigned, 0 ambiguous",
+        "Run `git-paoding status` to inspect atoms.",
+    ]
+    assert "src/file_0.py" not in result.output
+    assert "src/file_162.py" not in result.output
 
 
 @pytest.mark.unit

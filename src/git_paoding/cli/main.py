@@ -6,7 +6,12 @@ from typing import NoReturn
 import click
 
 from git_paoding import __version__, api
-from git_paoding.cli.render import render_assign, render_publish, render_status
+from git_paoding.cli.render import (
+    render_assign,
+    render_publish,
+    render_slice_added,
+    render_status,
+)
 from git_paoding.core.model import PaodingError
 from git_paoding.github.gh_cli import GhCliBackend
 from git_paoding.gitio.runner import GitError
@@ -54,7 +59,7 @@ def slice_add_command(slice_id: str, title: str) -> None:
         result = api.add_slice(Path.cwd(), slice_id, title)
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
-    click.echo(render_status(result))
+    click.echo(render_slice_added(result, slice_id=slice_id, title=title))
 
 
 @main.command("status")
