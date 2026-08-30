@@ -1,0 +1,10 @@
+{
+  "baseRefName": "paoding/feature-a/storage/base",
+  "body": "<!-- paoding-slice-id: storage -->",
+  "headRefName": "paoding/feature-a/storage/head",
+  "isDraft": true,
+  "number": 41,
+  "state": "CLOSED",
+  "title": "[SLICE] Storage",
+  "url": "https://github.com/example/project/pull/41"
+}

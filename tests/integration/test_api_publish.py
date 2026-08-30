@@ -219,6 +219,42 @@ def test_publish_recovers_slice_pr_identity_from_marker(
     assert JsonSessionStore(scratch.path).load("main").slices[0].pr_number == 40
 
 
+def test_publish_adopts_marker_from_damaged_body_and_heals_by_appending(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    damaged_body = (
+        "Human narrative that must survive.  \n"
+        "<!-- paoding-managed:start -->\n"
+        "damaged machine region without an end delimiter\n"
+        f"{slice_marker('review')}"
+    )
+    fake_backend.seed(
+        PRRecord(
+            number=40,
+            url="https://example.test/pulls/40",
+            title="[SLICE] Old title",
+            body=damaged_body,
+            state=PRState.OPEN,
+            is_draft=True,
+            base_ref="old/base",
+            head_ref="old/head",
+        )
+    )
+
+    result = publish(scratch.path, backend=fake_backend)
+
+    assert result.slices[0].pr_number == 40
+    assert fake_backend.creates == [41]  # integration only
+    healed = fake_backend.prs[40].body
+    assert healed.startswith(damaged_body)
+    assert healed.endswith("<!-- paoding-managed:end -->")
+    assert slice_marker("review") in healed
+
+
 def test_duplicate_marker_fails_publish_without_touching_slice_prs(
     scratch_repo_factory: ScratchRepoFactory,
     tmp_path: Path,
