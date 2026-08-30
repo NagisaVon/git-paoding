@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from git_paoding.core.model import AssignResult, PublishResult, StatusResult
+from git_paoding.core.model import AssignResult, PublishResult, SliceStatus, StatusResult
 
 
 def render_status(result: StatusResult) -> str:
@@ -41,6 +41,25 @@ def render_status(result: StatusResult) -> str:
         if atom.preview:
             lines.extend(f"    {line}" for line in atom.preview.splitlines())
     return "\n".join(lines)
+
+
+def render_slice_added(result: StatusResult, *, slice_id: str, title: str) -> str:
+    """Render a concise acknowledgement for the slice-add mutation."""
+
+    active_count = sum(slice_.status is SliceStatus.ACTIVE for slice_ in result.slices)
+    return "\n".join(
+        [
+            f"Added slice: {slice_id}",
+            f"Title: {title}",
+            f"Session: {result.session.canonical_branch}",
+            f"Slices: {active_count} active",
+            (
+                f"Action needed: {result.unassigned_count} unassigned, "
+                f"{result.ambiguous_count} ambiguous"
+            ),
+            "Run `git-paoding status` to inspect atoms.",
+        ]
+    )
 
 
 def render_assign(result: AssignResult) -> str:
