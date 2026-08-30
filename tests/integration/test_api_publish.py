@@ -177,6 +177,10 @@ def test_empty_slice_is_reported_and_does_not_create_slice_pr(
     ]
     assert result.slices[1].pr_number is None
     assert len(fake_backend.creates) == 2  # integration + non-empty slice
+    empty_refs = generated_refs(branch_key("main"), "empty")
+    assert ls_remote(scratch.path, "origin", empty_refs.base, empty_refs.head) == ()
+    assert empty_refs.base not in _generated_local_refs(scratch.path)
+    assert empty_refs.head not in _generated_local_refs(scratch.path)
     assert result.integration_pr is not None
     integration_body = fake_backend.prs[result.integration_pr].body
     assert "`empty` — No owned atoms _(currently empty)_" in integration_body
