@@ -1,4 +1,4 @@
-"""Public library facade for the T07 command surface.
+"""Public library facade: one typed function per CLI verb.
 
 The facade owns repository/session discovery and backend injection.  Frontends
 receive only typed Pydantic result objects and never depend on CLI internals.

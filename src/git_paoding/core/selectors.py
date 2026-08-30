@@ -1,7 +1,7 @@
 """Minimal atom-id and exact-path assignment selectors.
 
-T07 deliberately keeps this module small.  Glob, directory, range, batch, and
-force semantics are added by T12 after the CP2 facade has frozen.
+Glob, directory, range, batch, and force semantics are deliberately deferred
+until after the CP2 facade freeze.
 """
 
 from __future__ import annotations

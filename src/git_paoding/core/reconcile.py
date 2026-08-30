@@ -1,8 +1,8 @@
 """Deterministic attribution reconciliation.
 
-T05 intentionally implements only the vertical-slice minimum: an owned atom is
-carried forward when the new atom has the same Base-anchored range.  The wider
-overlap, ambiguity, and focus rules belong to T09.
+Only the vertical-slice minimum is implemented: an owned atom is carried
+forward when the new atom has the same Base-anchored range.  The wider
+overlap-inheritance, ambiguity, and focus rules are deliberately deferred.
 """
 
 from __future__ import annotations
