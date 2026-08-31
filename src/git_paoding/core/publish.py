@@ -612,7 +612,7 @@ def archive_session(
 
         for index, slice_ in enumerate(session.slices):
             slice_pr = archive_prs.get(index)
-            if slice_pr is not None:
+            if slice_pr is not None and slice_.status is SliceStatus.ACTIVE:
                 archived_pr = archive_slice_pr(
                     backend,
                     slice_pr.number,

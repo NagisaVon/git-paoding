@@ -465,6 +465,44 @@ def test_property_08_archive_retains_lifecycle_records(
     assert ls_remote(scratch.path, "origin", refs.base, refs.head) == ()
 
 
+def test_property_08_archive_preserves_removed_slice_note(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch = _prepare_repository(
+        scratch_repo_factory,
+        tmp_path,
+        fake_backend,
+        base={"active.py": "before\n", "removed.py": "before\n"},
+        final={"active.py": "after\n", "removed.py": "after\n"},
+    )
+    add_slice(scratch.path, "active", "Active review")
+    add_slice(scratch.path, "removed", "Removed review")
+    assign(scratch.path, "active", ["active.py"])
+    assign(scratch.path, "removed", ["removed.py"])
+    first_publish = publish(scratch.path, backend=fake_backend)
+    removed_number = _published_numbers(first_publish)["removed"]
+
+    remove_slice(scratch.path, "removed")
+    assign(scratch.path, "active", ["removed.py"])
+    second_publish = publish(scratch.path, backend=fake_backend)
+    integration_number = second_publish.integration_pr
+    assert integration_number is not None
+    assert "removed from the active decomposition" in fake_backend.prs[removed_number].body
+    fake_backend.prs[integration_number] = fake_backend.prs[integration_number].model_copy(
+        update={"state": PRState.MERGED}
+    )
+
+    archive(scratch.path, backend=fake_backend)
+
+    removed_body = fake_backend.prs[removed_number].body
+    assert "removed from the active decomposition" in removed_body
+    assert "Archived after the integration change" not in removed_body
+    refs = generated_refs(branch_key("main"), "removed")
+    assert ls_remote(scratch.path, "origin", refs.base, refs.head) == ()
+
+
 def test_property_09_remove_then_add_creates_a_new_identity(
     scratch_repo_factory: ScratchRepoFactory,
     tmp_path: Path,
