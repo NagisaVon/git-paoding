@@ -45,6 +45,7 @@ def test_rename_updates_title_and_body_on_the_same_pr() -> None:
     result = rename_slice_pr(
         backend,
         41,
+        current=backend.prs[41],
         slice_id="storage",
         title="Storage abstraction",
         prefix="ABC-123",
@@ -65,15 +66,15 @@ def test_remove_adds_note_before_closing_and_is_idempotent() -> None:
     backend = FakeBackend()
     _seed_slice(backend)
 
-    first = remove_slice_pr(backend, 41, slice_id="storage")
+    first = remove_slice_pr(backend, 41, current=backend.prs[41], slice_id="storage")
     calls_after_first = list(backend.call_log)
-    second = remove_slice_pr(backend, 41, slice_id="storage")
+    second = remove_slice_pr(backend, 41, current=backend.prs[41], slice_id="storage")
 
     assert first.number == second.number == 41
     assert second.state is PRState.CLOSED
     assert "removed from the active decomposition" in second.body
     assert backend.closes == [41]
-    assert backend.call_log == [*calls_after_first, "get:41"]
+    assert backend.call_log == calls_after_first
 
 
 @pytest.mark.unit
@@ -84,6 +85,7 @@ def test_archive_adds_final_links_before_closing() -> None:
     result = archive_slice_pr(
         backend,
         41,
+        current=backend.prs[41],
         integration_pr_number=40,
         integration_pr_url="https://github.com/example/project/pull/40",
         merged_commit="abcdef0123456789",
@@ -110,6 +112,7 @@ def test_archive_rejects_an_accidentally_merged_slice() -> None:
         archive_slice_pr(
             backend,
             41,
+            current=backend.prs[41],
             integration_pr_number=40,
             integration_pr_url="https://github.com/example/project/pull/40",
             merged_commit="abcdef0123456789",

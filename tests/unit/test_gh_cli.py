@@ -147,17 +147,16 @@ def test_get_pr_parses_merged_integration_state(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.unit
-def test_create_draft_pr_uses_recorded_create_and_view_shapes(
+def test_create_draft_pr_builds_and_caches_record_without_readback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = GhCliBackend(Path("."))
     create_output = (GOLDEN / "pr-create.txt").read_text()
-    view_output = (GOLDEN / "pr-view.json").read_text()
     seen: list[tuple[str, ...]] = []
 
     def fake_run(args: tuple[str, ...]) -> str:
         seen.append(args)
-        return create_output if args[:2] == ("pr", "create") else view_output
+        return create_output
 
     monkeypatch.setattr(backend, "_run", fake_run)
 
@@ -169,6 +168,10 @@ def test_create_draft_pr_uses_recorded_create_and_view_shapes(
     )
 
     assert record.number == 41
+    assert record.title == "[slice] Storage"
+    assert record.body == "body"
+    assert record.state is PRState.OPEN
+    assert record.is_draft is True
     assert seen == [
         (
             "pr",
@@ -182,21 +185,86 @@ def test_create_draft_pr_uses_recorded_create_and_view_shapes(
             "[slice] Storage",
             "--body",
             "body",
-        ),
-        (
-            "pr",
-            "view",
-            "https://github.com/example/project/pull/41",
-            "--json",
-            "number,url,title,body,state,isDraft,baseRefName,headRefName",
-        ),
+        )
     ]
 
 
 @pytest.mark.unit
-def test_update_pr_uses_edit_then_recorded_json_view(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_pr_uses_cached_record_without_readback(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = GhCliBackend(Path("."))
-    view_output = (GOLDEN / "pr-view.json").read_text()
+    seen: list[tuple[str, ...]] = []
+
+    def fake_run(args: tuple[str, ...]) -> str:
+        seen.append(args)
+        if args[:2] == ("pr", "list"):
+            return (GOLDEN / "pr-list.json").read_text()
+        return ""
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    backend.list_open_prs()
+    seen.clear()
+
+    record = backend.update_pr(41, title="[slice] Storage", body="new body")
+
+    assert record.number == 41
+    assert record.body == "new body"
+    assert seen == [
+        (
+            "pr",
+            "edit",
+            "41",
+            "--title",
+            "[slice] Storage",
+            "--body",
+            "new body",
+        )
+    ]
+
+
+@pytest.mark.unit
+def test_close_pr_uses_cached_record_without_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = GhCliBackend(Path("."))
+    seen: list[tuple[str, ...]] = []
+
+    def fake_run(args: tuple[str, ...]) -> str:
+        seen.append(args)
+        if args[:2] == ("pr", "list"):
+            return (GOLDEN / "pr-list.json").read_text()
+        return ""
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+    backend.list_open_prs()
+    seen.clear()
+
+    record = backend.close_pr(41)
+
+    assert record.state is PRState.CLOSED
+    assert seen == [("pr", "close", "41")]
+
+
+@pytest.mark.unit
+def test_create_draft_pr_rejects_unexpected_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = GhCliBackend(Path("."))
+    monkeypatch.setattr(backend, "_run", lambda args: "https://example.test/not-a-pr/41\n")
+
+    with pytest.raises(GhResponseError, match="unexpected pull-request URL"):
+        backend.create_draft_pr(
+            title="[slice] Storage",
+            body="body",
+            base_ref="generated/base",
+            head_ref="generated/head",
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("operation", ["update", "close"])
+def test_mutation_cache_miss_falls_back_to_one_view(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    backend = GhCliBackend(Path("."))
+    view_output = (GOLDEN / "pr-view-closed.json").read_text()
     seen: list[tuple[str, ...]] = []
 
     def fake_run(args: tuple[str, ...]) -> str:
@@ -205,40 +273,12 @@ def test_update_pr_uses_edit_then_recorded_json_view(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(backend, "_run", fake_run)
 
-    record = backend.update_pr(41, title="[slice] Storage", body="new body")
+    if operation == "update":
+        backend.update_pr(41, title="[slice] Storage", body="new body")
+    else:
+        backend.close_pr(41)
 
-    assert record.number == 41
-    assert seen[0] == (
-        "pr",
-        "edit",
-        "41",
-        "--title",
-        "[slice] Storage",
-        "--body",
-        "new body",
-    )
-    assert seen[1][:3] == ("pr", "view", "41")
-
-
-@pytest.mark.unit
-def test_close_pr_uses_close_then_recorded_closed_json_view(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    backend = GhCliBackend(Path("."))
-    closed_output = (GOLDEN / "pr-view-closed.json").read_text()
-    seen: list[tuple[str, ...]] = []
-
-    def fake_run(args: tuple[str, ...]) -> str:
-        seen.append(args)
-        return closed_output if "--json" in args else ""
-
-    monkeypatch.setattr(backend, "_run", fake_run)
-
-    record = backend.close_pr(41)
-
-    assert record.state is PRState.CLOSED
-    assert seen[0] == ("pr", "close", "41")
-    assert seen[1][:3] == ("pr", "view", "41")
+    assert sum(args[:2] == ("pr", "view") for args in seen) == 1
 
 
 @pytest.mark.unit
