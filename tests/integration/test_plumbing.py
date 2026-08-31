@@ -11,10 +11,13 @@ from git_paoding.gitio.plumbing import (
     GitIdentity,
     cat_file,
     commit_tree,
+    diff_numstat,
     hash_object,
     ls_remote,
     ls_tree,
+    merge_base,
     mktree,
+    object_exists,
     rev_parse,
     update_ref,
 )
@@ -82,3 +85,38 @@ def test_ls_remote_reads_local_remote_without_fetching(
 
     assert refs[0].oid == repo.final_oid
     assert refs[0].ref == "refs/heads/main"
+
+
+@pytest.mark.integration
+def test_object_exists_and_merge_base_use_local_commit_objects(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory({"a.txt": "a\n"}, {"a.txt": "b\n"})
+
+    assert object_exists(repo.path, repo.base_oid)
+    assert not object_exists(repo.path, "f" * 40)
+    assert merge_base(repo.path, repo.base_oid, repo.final_oid) == repo.base_oid
+
+
+@pytest.mark.integration
+def test_diff_numstat_counts_renames_as_one_file(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory(
+        {"old-name.txt": "unchanged\n"},
+        {"new-name.txt": "unchanged\n"},
+    )
+
+    assert diff_numstat(repo.path, repo.base_oid, repo.final_oid) == (1, 0, 0)
+
+
+@pytest.mark.integration
+def test_diff_numstat_counts_binary_cells_as_zero(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory(
+        {"image.bin": b"\x00old"},
+        {"image.bin": b"\x00new"},
+    )
+
+    assert diff_numstat(repo.path, repo.base_oid, repo.final_oid) == (1, 0, 0)

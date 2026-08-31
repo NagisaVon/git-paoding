@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence, cast
 
-from git_paoding.gitio.runner import run_git
+from git_paoding.gitio.runner import GitCommandError, run_git
 
 ObjectType = Literal["blob", "tree", "commit", "tag"]
 TreeObjectType = Literal["blob", "tree", "commit"]
@@ -44,6 +44,57 @@ def rev_parse(repo: Path, revision: str) -> str:
 
     result = run_git(("rev-parse", "--verify", "--end-of-options", revision), cwd=repo)
     return result.stdout_text().strip()
+
+
+def object_exists(repo: Path, oid: str) -> bool:
+    """Return whether an OID names a locally available commit object."""
+
+    try:
+        run_git(("cat-file", "-e", f"{oid}^{{commit}}"), cwd=repo)
+    except GitCommandError:
+        return False
+    return True
+
+
+def merge_base(repo: Path, left_oid: str, right_oid: str) -> str:
+    """Return the best common ancestor of two commits."""
+
+    result = run_git(("merge-base", left_oid, right_oid), cwd=repo)
+    return result.stdout_text().strip()
+
+
+def diff_numstat(repo: Path, base_oid: str, head_oid: str) -> tuple[int, int, int]:
+    """Return rename-aware changed-file, addition, and deletion counts."""
+
+    output = run_git(
+        ("diff", "--numstat", "-z", "-M", base_oid, head_oid),
+        cwd=repo,
+    ).stdout
+    records = output.split(b"\0")
+    files = additions = deletions = 0
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        cells = record.split(b"\t", maxsplit=2)
+        if len(cells) != 3:
+            raise ValueError("Git diff --numstat returned a malformed record")
+        raw_additions, raw_deletions, raw_path = cells
+        try:
+            additions += 0 if raw_additions == b"-" else int(raw_additions)
+            deletions += 0 if raw_deletions == b"-" else int(raw_deletions)
+        except ValueError as error:
+            raise ValueError("Git diff --numstat returned a non-numeric count") from error
+        files += 1
+        if not raw_path:
+            # With -z, a rename record has an empty pathname in its first
+            # record followed by the old and new path as separate fields.
+            if index + 1 >= len(records) or not records[index] or not records[index + 1]:
+                raise ValueError("Git diff --numstat returned a malformed rename record")
+            index += 2
+    return files, additions, deletions
 
 
 def cat_file(repo: Path, oid: str, *, object_type: ObjectType = "blob") -> bytes:

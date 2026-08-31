@@ -104,6 +104,34 @@ class PRState(str, Enum):
     MERGED = "merged"
 
 
+class PullRequestTarget(_Model):
+    """Read-only PR metadata resolved before initialization."""
+
+    number: PositiveInt
+    url: NonEmptyString
+    state: PRState
+    is_cross_repository: bool
+    base_ref_name: NonEmptyString
+    base_ref_oid: NonEmptyString
+    head_ref_name: NonEmptyString
+    head_ref_oid: NonEmptyString
+    changed_files: NonNegativeInt
+    additions: NonNegativeInt
+    deletions: NonNegativeInt
+
+
+class SourcePullRequest(_Model):
+    """Provenance stored on a session initialized from an existing PR."""
+
+    number: PositiveInt
+    url: NonEmptyString
+    base_ref_name: NonEmptyString
+    base_ref_oid: NonEmptyString
+    head_ref_name: NonEmptyString
+    head_ref_oid: NonEmptyString
+    merge_base_oid: NonEmptyString
+
+
 class PublishOutcome(str, Enum):
     """Effect of publishing one slice."""
 
@@ -164,6 +192,7 @@ class Session(_Model):
     last_final_oid: NonEmptyString | None = None
     focus_slice: SliceId | None = None
     integration_pr: PositiveInt | None = None
+    source_pr: SourcePullRequest | None = None
     archived: bool = False
 
     @model_validator(mode="after")

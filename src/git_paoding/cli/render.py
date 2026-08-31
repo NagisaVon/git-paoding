@@ -107,6 +107,31 @@ def render_status(result: StatusResult, *, full: bool = False) -> str:
     return "\n".join(lines)
 
 
+def render_init(result: StatusResult) -> str:
+    """Render a compact acknowledgement for either initialization path."""
+
+    session = result.session
+    active_count = sum(slice_.status is SliceStatus.ACTIVE for slice_ in result.slices)
+    lines = [
+        f"Branch: {session.canonical_branch}",
+        f"Pinned base: {session.base_ref or '-'} ({session.base_oid[:12]})",
+    ]
+    if session.integration_pr is not None:
+        lines.append(f"Source PR: #{session.integration_pr}")
+    lines.extend(
+        [
+            f"Atoms: {len(result.atoms)}",
+            (
+                f"Action needed: {result.unassigned_count} unassigned, "
+                f"{result.ambiguous_count} ambiguous"
+            ),
+            f"Slices: {active_count} active",
+            "Next: `git-paoding status --summary`",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def render_slice_list(result: StatusResult) -> str:
     """Render only slice identities and diffstats for the read-only list verb."""
 

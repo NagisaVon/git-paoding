@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from git_paoding.core.model import PaodingError, PRRecord
+from git_paoding.core.model import PaodingError, PRRecord, PullRequestTarget
 
 
 class GitHubBackendError(PaodingError):
@@ -21,6 +21,14 @@ class DuplicatePullRequestMarkerError(GitHubBackendError):
 
 class PullRequestNotFoundError(GitHubBackendError):
     """Raised when a requested pull-request identity no longer exists."""
+
+
+@runtime_checkable
+class PullRequestTargetResolver(Protocol):
+    """Resolve initialization metadata without expanding the publication seam."""
+
+    def resolve_pr_target(self, selector: str) -> PullRequestTarget:
+        """Return canonical refs, objects, and diffstat for one pull request."""
 
 
 @runtime_checkable

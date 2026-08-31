@@ -14,6 +14,7 @@ from git_paoding.cli.render import (
     render_archive,
     render_assign,
     render_focus,
+    render_init,
     render_publish,
     render_slice_added,
     render_slice_list,
@@ -98,26 +99,47 @@ def agent_install_command(targets: tuple[str, ...], scope: str, force: bool) -> 
 
 
 @main.command("init")
-@click.option("--base", required=True, help="Base ref to pin for this review session.")
+@click.option("--base", help="Base ref to pin for this review session.")
+@click.option("--pr", help="Existing pull-request number or URL to initialize from.")
+@click.option(
+    "--replace",
+    is_flag=True,
+    help="Replace an existing session after validating compatibility.",
+)
 @click.option(
     "--slice-prefix",
     default="slice",
     show_default=True,
     help="Short identifier used in generated slice pull-request titles.",
 )
-def init_command(base: str, slice_prefix: str) -> None:
+def init_command(base: str | None, pr: str | None, replace: bool, slice_prefix: str) -> None:
     """Initialize a review session on the current branch."""
 
+    if (base is None) == (pr is None):
+        raise click.UsageError("Exactly one of --base or --pr is required")
+    if replace:
+        raise click.UsageError("--replace is not supported by this version")
     repo = Path.cwd()
     try:
-        result = _facade.init_session(
-            repo,
-            base,
-            slice_pr_prefix=slice_prefix,
-        )
+        if pr is not None:
+            backend = _backend(repo)
+            backend.check_ready()
+            target = backend.resolve_pr_target(pr)
+            result = _facade.init_session_from_pr(
+                repo,
+                target,
+                slice_pr_prefix=slice_prefix,
+            )
+        else:
+            assert base is not None
+            result = _facade.init_session(
+                repo,
+                base,
+                slice_pr_prefix=slice_prefix,
+            )
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
-    click.echo(render_status(result))
+    click.echo(render_init(result))
 
 
 @main.group("slice")
