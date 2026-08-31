@@ -15,11 +15,14 @@ from git_paoding.core.model import (
     AssignResult,
     AtomState,
     PaodingError,
+    PRState,
     PublishResult,
+    PullRequestTarget,
     Session,
     SessionAlreadyExistsError,
     Slice,
     SliceStatus,
+    SourcePullRequest,
     StatusResult,
 )
 from git_paoding.core.progress import ProgressCallback
@@ -31,6 +34,7 @@ from git_paoding.core.publish import (
 )
 from git_paoding.core.selectors import assign_batch_selectors, assign_selectors
 from git_paoding.github.backend import GitHubBackend
+from git_paoding.gitio import plumbing
 from git_paoding.gitio.plumbing import rev_parse
 from git_paoding.gitio.runner import GitCommandError, run_git
 from git_paoding.store.jsonstore import JsonSessionStore
@@ -43,6 +47,10 @@ class BranchResolutionError(PaodingError):
 
 class InvalidBaseRefError(PaodingError):
     """Raised when local initialization is given a non-branch base ref."""
+
+
+class PullRequestInitializationError(PaodingError):
+    """Raised when pull-request metadata disagrees with the local repository."""
 
 
 class SliceAlreadyExistsError(PaodingError):
@@ -128,25 +136,126 @@ def init_session(
         )
     repository = repo.resolve()
     branch = _canonical_branch(repository, canonical_branch)
-    store = JsonSessionStore(repository)
-    with SessionLock(repository, branch):
-        if store.exists(branch):
+    _validated_base_branch(repository, base)
+    base_oid = rev_parse(repository, f"{base}^{{commit}}")
+    # Verify the canonical branch ref independently of the current checkout.
+    rev_parse(repository, f"refs/heads/{branch}^{{commit}}")
+    session = Session(
+        canonical_branch=branch,
+        base_ref=base,
+        base_oid=base_oid,
+        slice_pr_prefix=slice_pr_prefix,
+    )
+    return _create_session(repository, session)
+
+
+def _create_session(repo: Path, session: Session) -> StatusResult:
+    """Create and reconcile a fully validated session under its branch lock."""
+
+    store = JsonSessionStore(repo)
+    with SessionLock(repo, session.canonical_branch):
+        if store.exists(session.canonical_branch):
             raise SessionAlreadyExistsError(
-                f"A git-paoding session already exists for branch {branch!r}"
+                f"A git-paoding session already exists for branch {session.canonical_branch!r}"
             )
-        _validated_base_branch(repository, base)
-        base_oid = rev_parse(repository, f"{base}^{{commit}}")
-        # Verify the canonical branch ref independently of the current checkout.
-        rev_parse(repository, f"refs/heads/{branch}^{{commit}}")
-        session = Session(
-            canonical_branch=branch,
-            base_ref=base,
-            base_oid=base_oid,
-            slice_pr_prefix=slice_pr_prefix,
-        )
-        session, _replay_atoms, status = reconcile_and_status(repository, session)
+        session, _replay_atoms, status = reconcile_and_status(repo, session)
         store.save(session)
         return status
+
+
+def _head_branch_instruction(target: PullRequestTarget) -> str:
+    return (
+        f"Run `git fetch origin {target.head_ref_name}` and then "
+        f"`git checkout {target.head_ref_name}` (or update that local branch to "
+        f"{target.head_ref_oid}) before retrying. git-paoding never fetches automatically."
+    )
+
+
+def init_session_from_pr(
+    repo: Path,
+    target: PullRequestTarget,
+    *,
+    slice_pr_prefix: str = "slice",
+) -> StatusResult:
+    """Validate a PR against local objects and initialize from its merge base."""
+
+    if target.state is not PRState.OPEN:
+        raise PullRequestInitializationError(
+            f"PR #{target.number} is {target.state.value}; only open PRs can seed a session"
+        )
+    if target.is_cross_repository:
+        raise PullRequestInitializationError(
+            f"PR #{target.number} is a cross-repository PR; cross-repository PRs are not "
+            "supported for initialization"
+        )
+
+    repository = repo.resolve()
+    try:
+        local_head_oid = rev_parse(repository, f"refs/heads/{target.head_ref_name}^{{commit}}")
+    except GitCommandError as error:
+        raise PullRequestInitializationError(
+            f"Local head branch {target.head_ref_name!r} does not exist. "
+            f"{_head_branch_instruction(target)}"
+        ) from error
+    if local_head_oid != target.head_ref_oid:
+        raise PullRequestInitializationError(
+            f"Local head branch {target.head_ref_name!r} is at {local_head_oid}, but PR "
+            f"#{target.number} expects {target.head_ref_oid}. {_head_branch_instruction(target)}"
+        )
+
+    if not plumbing.object_exists(repository, target.base_ref_oid):
+        raise PullRequestInitializationError(
+            f"PR #{target.number} base OID {target.base_ref_oid} is not available locally. "
+            f"Run `git fetch origin {target.base_ref_name}` before retrying; git-paoding "
+            "never fetches automatically."
+        )
+    if not plumbing.object_exists(repository, target.head_ref_oid):
+        raise PullRequestInitializationError(
+            f"PR #{target.number} head OID {target.head_ref_oid} is not available locally. "
+            f"{_head_branch_instruction(target)}"
+        )
+
+    try:
+        pinned_base_oid = plumbing.merge_base(repository, target.base_ref_oid, target.head_ref_oid)
+    except GitCommandError as error:
+        raise PullRequestInitializationError(
+            f"PR #{target.number} base OID {target.base_ref_oid} and head OID "
+            f"{target.head_ref_oid} have no common ancestor"
+        ) from error
+    if not pinned_base_oid:
+        raise PullRequestInitializationError(
+            f"PR #{target.number} base OID {target.base_ref_oid} and head OID "
+            f"{target.head_ref_oid} have no common ancestor"
+        )
+
+    local_diffstat = plumbing.diff_numstat(repository, pinned_base_oid, target.head_ref_oid)
+    github_diffstat = (target.changed_files, target.additions, target.deletions)
+    if local_diffstat != github_diffstat:
+        raise PullRequestInitializationError(
+            f"PR #{target.number} diffstat disagrees with local Git: GitHub reports "
+            f"{github_diffstat[0]} files, +{github_diffstat[1]}, -{github_diffstat[2]}; "
+            f"local Git reports {local_diffstat[0]} files, +{local_diffstat[1]}, "
+            f"-{local_diffstat[2]}. Likely causes are stale local objects or "
+            "rename/whitespace accounting differences."
+        )
+
+    session = Session(
+        canonical_branch=target.head_ref_name,
+        base_ref=target.base_ref_name,
+        base_oid=pinned_base_oid,
+        slice_pr_prefix=slice_pr_prefix,
+        integration_pr=target.number,
+        source_pr=SourcePullRequest(
+            number=target.number,
+            url=target.url,
+            base_ref_name=target.base_ref_name,
+            base_ref_oid=target.base_ref_oid,
+            head_ref_name=target.head_ref_name,
+            head_ref_oid=target.head_ref_oid,
+            merge_base_oid=pinned_base_oid,
+        ),
+    )
+    return _create_session(repository, session)
 
 
 def add_slice(
