@@ -54,10 +54,9 @@ from git_paoding.gitio.diffparse import diff_trees
 from git_paoding.gitio.plumbing import rev_parse
 from git_paoding.gitio.refs import (
     GeneratedRefs,
-    RefSyncResult,
-    delete_projection_refs,
+    delete_projection_refs_batch,
     generated_refs,
-    sync_projection_refs,
+    sync_projection_refs_batch,
 )
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 from git_paoding.store.lock import SessionLock
@@ -73,7 +72,7 @@ class _PreparedSlice:
 
     base_ref: str
     head_ref: str
-    ref_sync: RefSyncResult
+    ref_sync_no_op: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,19 +500,26 @@ def publish_session(
                 total=generated_ref_count,
             ),
         ):
+            desired_refs = {
+                ref: oid
+                for built in built_slices.values()
+                for ref, oid in (
+                    (built.refs.base, built.base_oid),
+                    (built.refs.head, built.head_oid),
+                )
+            }
+            batch_ref_sync = sync_projection_refs_batch(
+                repository,
+                remote,
+                desired_refs,
+                timeout=network_timeout,
+            )
             prepared_slices: dict[str, _PreparedSlice] = {}
             for slice_id, built in built_slices.items():
                 prepared_slices[slice_id] = _PreparedSlice(
                     base_ref=built.base_ref,
                     head_ref=built.head_ref,
-                    ref_sync=sync_projection_refs(
-                        repository,
-                        remote,
-                        built.refs,
-                        base_oid=built.base_oid,
-                        head_oid=built.head_oid,
-                        timeout=network_timeout,
-                    ),
+                    ref_sync_no_op=batch_ref_sync.slice_no_op(built.refs),
                 )
 
         active_slices = [slice_ for slice_ in session.slices if slice_.status is SliceStatus.ACTIVE]
@@ -544,6 +550,7 @@ def publish_session(
             created_slice_ids: set[str] = set()
             updated_slices = list(session.slices)
             branch = branch_key(session.canonical_branch)
+            removed_refs: list[GeneratedRefs] = []
             for index, slice_ in enumerate(session.slices):
                 if slice_.status is SliceStatus.ACTIVE:
                     continue
@@ -551,12 +558,13 @@ def publish_session(
                 if existing is not None:
                     closed = remove_slice_pr(backend, existing.number, slice_id=slice_.id)
                     updated_slices[index] = slice_.model_copy(update={"pr_number": closed.number})
-                delete_projection_refs(
-                    repository,
-                    remote,
-                    generated_refs(branch, slice_.id),
-                    timeout=network_timeout,
-                )
+                removed_refs.append(generated_refs(branch, slice_.id))
+            delete_projection_refs_batch(
+                repository,
+                remote,
+                removed_refs,
+                timeout=network_timeout,
+            )
 
             for item_index, slice_ in enumerate(active_slices, start=1):
                 if item_index > 1 and progress is not None:
@@ -642,7 +650,7 @@ def publish_session(
                     outcome = PublishOutcome.EMPTY
                 elif slice_.id in created_slice_ids:
                     outcome = PublishOutcome.CREATED
-                elif not prepared_slices[slice_.id].ref_sync.is_no_op or prior_prs[slice_.id] != pr:
+                elif not prepared_slices[slice_.id].ref_sync_no_op or prior_prs[slice_.id] != pr:
                     outcome = PublishOutcome.REFRESHED
                 else:
                     outcome = PublishOutcome.NO_OP
@@ -732,6 +740,7 @@ def archive_session(
         updated_slices = list(session.slices)
         branch = branch_key(session.canonical_branch)
         archive_prs: dict[int, PRRecord] = {}
+        archived_refs: list[GeneratedRefs] = []
         for index, slice_ in enumerate(session.slices):
             marker_matches = [pr for pr in open_prs if slice_marker(slice_.id) in pr.body]
             if len(marker_matches) > 1:
@@ -770,11 +779,9 @@ def archive_session(
                 )
             else:
                 updated_slices[index] = slice_.model_copy(update={"status": SliceStatus.ARCHIVED})
-            delete_projection_refs(
-                repository,
-                remote,
-                generated_refs(branch, slice_.id),
-            )
+            archived_refs.append(generated_refs(branch, slice_.id))
+
+        delete_projection_refs_batch(repository, remote, archived_refs)
 
         session = session.model_copy(
             update={

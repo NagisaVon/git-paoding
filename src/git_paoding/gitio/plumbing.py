@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence, cast
+from typing import Literal, Mapping, Sequence, cast
 
 from git_paoding.gitio.runner import GitCommandError, run_git
 
@@ -234,6 +234,23 @@ def for_each_ref(
 
     result = run_git(("for-each-ref", f"--format={format}", prefix), cwd=repo)
     return tuple(line for line in result.stdout_text().splitlines() if line)
+
+
+def update_refs_transaction(repo: Path, updates: Mapping[str, str | None]) -> None:
+    """Apply ref creates, updates, and deletions in one local transaction."""
+
+    if not updates:
+        return
+
+    commands = bytearray(b"start\0")
+    for ref, new_oid in updates.items():
+        encoded_ref = ref.encode("utf-8", errors="surrogateescape")
+        if new_oid is None:
+            commands.extend(b"delete " + encoded_ref + b"\0\0")
+        else:
+            commands.extend(b"update " + encoded_ref + b"\0" + new_oid.encode("ascii") + b"\0\0")
+    commands.extend(b"prepare\0commit\0")
+    run_git(("update-ref", "--stdin", "-z"), cwd=repo, input_data=bytes(commands))
 
 
 def ls_remote(

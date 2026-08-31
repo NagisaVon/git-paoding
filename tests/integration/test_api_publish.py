@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import git_paoding.gitio.refs as refs_module
 from conftest import FakeBackend, ScratchRepoFactory, ScratchRepository
 from git_paoding.api import (
     SessionReplacementError,
@@ -28,6 +29,7 @@ from git_paoding.core.model import (
     PRRecord,
     PRState,
     PublishOutcome,
+    Session,
     SliceStatus,
 )
 from git_paoding.core.progress import ProgressEvent, PublishPhase
@@ -43,6 +45,7 @@ from git_paoding.github.prbody import (
 )
 from git_paoding.gitio.plumbing import (
     GitIdentity,
+    RemoteRef,
     TreeEntry,
     commit_tree,
     hash_object,
@@ -50,14 +53,18 @@ from git_paoding.gitio.plumbing import (
     ls_tree,
     mktree,
     update_ref,
+    update_refs_transaction,
 )
 from git_paoding.gitio.refs import (
+    AtomicPushUnsupportedError,
+    BatchRefDeleteResult,
+    ConcurrentPublisherError,
     GeneratedRefs,
-    RefSyncResult,
+    delete_projection_refs_batch,
     generated_refs,
-    sync_projection_refs,
 )
-from git_paoding.gitio.runner import run_git
+from git_paoding.gitio.runner import GitTimeoutError, run_git
+from git_paoding.gitio.trace import OpCategory, collecting
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 
 pytestmark = pytest.mark.integration
@@ -96,6 +103,37 @@ def _prepare_repository(
     )
     init_session(scratch.path, "base", backend=fake_backend)
     add_slice(scratch.path, "review", "Review value change")
+    return scratch, remote
+
+
+def _prepare_two_slice_repository(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> tuple[ScratchRepository, Path]:
+    scratch = scratch_repo_factory(
+        {"first.txt": "old\n", "second.txt": "old\n"},
+        {"first.txt": "new\n", "second.txt": "new\n"},
+    )
+    run_git(("branch", "base", scratch.base_oid), cwd=scratch.path)
+    remote = tmp_path / "two-slice.git"
+    run_git(("init", "--bare", "--quiet", str(remote)), cwd=tmp_path)
+    run_git(("remote", "add", "origin", str(remote)), cwd=scratch.path)
+    run_git(
+        (
+            "push",
+            "--quiet",
+            "origin",
+            "refs/heads/base:refs/heads/base",
+            "refs/heads/main:refs/heads/main",
+        ),
+        cwd=scratch.path,
+    )
+    init_session(scratch.path, "base", backend=fake_backend)
+    add_slice(scratch.path, "first", "First change")
+    add_slice(scratch.path, "second", "Second change")
+    assign(scratch.path, "first", ["first.txt"])
+    assign(scratch.path, "second", ["second.txt"])
     return scratch, remote
 
 
@@ -160,27 +198,34 @@ def test_happy_path_second_publish_is_full_no_op(
     assignment = assign(scratch.path, "review", ["app.py"])
     assert [record.atom_id for record in assignment.assigned] == [status.atoms[0].atom_id]
 
-    import git_paoding.gitio.refs as refs_module
+    original_atomic_push = refs_module._push_atomic_ref_updates
+    pushed_batches: list[tuple[str, ...]] = []
 
-    original_force_push = refs_module._force_push
-    pushed_refs: list[str] = []
-
-    def record_force_push(
+    def record_atomic_push(
         repo: Path,
         remote: str,
-        ref: str,
         *,
+        desired: dict[str, str],
+        observed: dict[str, str],
+        changed: tuple[str, ...],
         timeout: float | None = None,
     ) -> None:
-        pushed_refs.append(ref)
-        original_force_push(repo, remote, ref, timeout=timeout)
+        pushed_batches.append(changed)
+        original_atomic_push(
+            repo,
+            remote,
+            desired=desired,
+            observed=observed,
+            changed=changed,
+            timeout=timeout,
+        )
 
-    monkeypatch.setattr(refs_module, "_force_push", record_force_push)
+    monkeypatch.setattr(refs_module, "_push_atomic_ref_updates", record_atomic_push)
 
     first = publish(scratch.path, backend=fake_backend)
 
     refs = generated_refs(branch_key("main"), "review")
-    assert pushed_refs == [refs.base, refs.head]
+    assert pushed_batches == [(refs.base, refs.head)]
     assert first.action_needed is False
     assert [item.outcome for item in first.slices] == [PublishOutcome.CREATED]
     assert first.integration_pr is not None
@@ -209,14 +254,14 @@ def test_happy_path_second_publish_is_full_no_op(
     advertised_before = ls_remote(scratch.path, "origin", refs.base, refs.head)
     creates_before = list(fake_backend.creates)
     updates_before = list(fake_backend.updates)
-    pushed_refs.clear()
+    pushed_batches.clear()
 
     second = publish(scratch.path, backend=fake_backend)
 
     assert [item.outcome for item in second.slices] == [PublishOutcome.NO_OP]
     assert second.integration_pr == first.integration_pr
     assert second.slices[0].pr_number == slice_pr_number
-    assert pushed_refs == []
+    assert pushed_batches == []
     assert fake_backend.creates == creates_before
     assert fake_backend.updates == updates_before
     assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
@@ -249,6 +294,34 @@ def test_publish_reports_the_named_phase_sequence(
         "Updating integration PR index",
         "Persisting final metadata",
     ]
+
+
+def test_multi_slice_publish_uses_one_remote_advertisement_and_at_most_one_push(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_two_slice_repository(
+        scratch_repo_factory,
+        tmp_path,
+        fake_backend,
+    )
+
+    with collecting() as first_trace:
+        first = publish(scratch.path, backend=fake_backend)
+    with collecting() as retry_trace:
+        retry = publish(scratch.path, backend=fake_backend)
+
+    assert [item.outcome for item in first.slices] == [
+        PublishOutcome.CREATED,
+        PublishOutcome.CREATED,
+    ]
+    assert first_trace.counts[OpCategory.GIT_REMOTE] == 2
+    assert [item.outcome for item in retry.slices] == [
+        PublishOutcome.NO_OP,
+        PublishOutcome.NO_OP,
+    ]
+    assert retry_trace.counts[OpCategory.GIT_REMOTE] == 1
 
 
 def test_unassigned_publish_has_zero_remote_calls_or_ref_writes(
@@ -726,6 +799,7 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     scratch_repo_factory: ScratchRepoFactory,
     tmp_path: Path,
     fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scratch = scratch_repo_factory(
         {"shared.txt": "one\nkeep\nthree\n"},
@@ -780,9 +854,27 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     returned = [atom for atom in removed.atoms if atom.path == "shared.txt" and atom.owner is None]
     assert len(returned) == 1
     assign(scratch.path, "second", [returned[0].atom_id])
+    original_delete_batch = delete_projection_refs_batch
+    close_state_at_delete: list[tuple[int, ...]] = []
+
+    def observe_delete_batch(
+        repo: Path,
+        remote_name: str,
+        refs: list[GeneratedRefs],
+        *,
+        timeout: float | None = None,
+    ) -> BatchRefDeleteResult:
+        close_state_at_delete.append(tuple(fake_backend.closes))
+        return original_delete_batch(repo, remote_name, refs, timeout=timeout)
+
+    monkeypatch.setattr(
+        "git_paoding.core.publish.delete_projection_refs_batch",
+        observe_delete_batch,
+    )
     after_remove = publish(scratch.path, backend=fake_backend)
     assert after_remove.slices[0].outcome is PublishOutcome.SKIPPED
     assert fake_backend.prs[first_number].state is PRState.CLOSED
+    assert close_state_at_delete == [(first_number,)]
     first_refs = generated_refs(branch_key("main"), "first")
     assert "ABC-123" not in first_refs.base
     assert "ABC-123" not in first_refs.head
@@ -798,6 +890,7 @@ def test_publish_wires_diffstats_related_links_rename_remove_and_archive(
     assert JsonSessionStore(scratch.path).load("main").archived is True
     assert all(slice_.status is SliceStatus.ARCHIVED for slice_ in archived.slices)
     assert fake_backend.prs[second_number].state is PRState.CLOSED
+    assert close_state_at_delete[-1] == (first_number, second_number)
     assert "Archived after the integration change" in fake_backend.prs[second_number].body
     second_refs = generated_refs(branch_key("main"), "second")
     assert ls_remote(scratch.path, "origin", second_refs.base, second_refs.head) == ()
@@ -870,36 +963,152 @@ def test_publish_persists_started_before_first_generated_ref_operation(
     scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
     assign(scratch.path, "review", ["app.py"])
 
-    original_sync = sync_projection_refs
-    observed_flags: list[bool] = []
+    original_save = JsonSessionStore.save
+    original_update = update_refs_transaction
+    operation_order: list[str] = []
+    validation_calls_at_started_save: list[str] = []
 
-    def observe_sync(
-        repo: Path,
-        remote: str,
-        refs: GeneratedRefs,
-        *,
-        base_oid: str,
-        head_oid: str,
-        timeout: float | None = None,
-    ) -> RefSyncResult:
-        observed_flags.append(JsonSessionStore(scratch.path).load("main").publication_started)
-        return original_sync(
-            repo,
-            remote,
-            refs,
-            base_oid=base_oid,
-            head_oid=head_oid,
-            timeout=timeout,
-        )
+    def observe_save(store: JsonSessionStore, session: Session) -> Path:
+        if session.publication_started and not operation_order:
+            operation_order.append("persist-started")
+            validation_calls_at_started_save.extend(fake_backend.call_log)
+            assert fake_backend.creates == []
+            assert fake_backend.updates == []
+            assert fake_backend.closes == []
+        return original_save(store, session)
 
-    monkeypatch.setattr("git_paoding.core.publish.sync_projection_refs", observe_sync)
+    def observe_update(repo: Path, updates: dict[str, str | None]) -> None:
+        operation_order.append("local-ref-transaction")
+        assert JsonSessionStore(scratch.path).load("main").publication_started is True
+        assert fake_backend.creates == []
+        assert fake_backend.updates == []
+        assert fake_backend.closes == []
+        original_update(repo, updates)
+
+    monkeypatch.setattr(JsonSessionStore, "save", observe_save)
+    monkeypatch.setattr("git_paoding.gitio.refs.update_refs_transaction", observe_update)
 
     publish(scratch.path, backend=fake_backend)
 
-    assert observed_flags == [True]
+    assert operation_order[:2] == ["persist-started", "local-ref-transaction"]
+    assert validation_calls_at_started_save == ["check_ready", "list_open_prs"]
     assert JsonSessionStore(scratch.path).load("main").publication_started is True
     with pytest.raises(SessionReplacementError, match="publication has already started"):
         replace_session(scratch.path, base="main")
+
+
+def test_atomic_transport_failure_happens_before_any_pull_request_mutation(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    run_git(("config", "receive.advertiseAtomic", "false"), cwd=remote)
+
+    with pytest.raises(AtomicPushUnsupportedError):
+        publish(scratch.path, backend=fake_backend)
+
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
+    assert JsonSessionStore(scratch.path).load("main").publication_started is True
+    refs = generated_refs(branch_key("main"), "review")
+    assert ls_remote(scratch.path, "origin", refs.base, refs.head) == ()
+
+
+def test_exact_lease_race_happens_before_any_pull_request_mutation(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    refs = generated_refs(branch_key("main"), "review")
+    real_ls_remote = ls_remote
+
+    def advertise_then_race(
+        repository: Path,
+        remote_name: str,
+        *patterns: str,
+        timeout: float | None = None,
+    ) -> tuple[RemoteRef, ...]:
+        advertised = real_ls_remote(
+            repository,
+            remote_name,
+            *patterns,
+            timeout=timeout,
+        )
+        update_ref(remote, refs.base, scratch.final_oid)
+        return advertised
+
+    monkeypatch.setattr("git_paoding.gitio.refs.ls_remote", advertise_then_race)
+
+    with pytest.raises(ConcurrentPublisherError, match="only one publisher"):
+        publish(scratch.path, backend=fake_backend)
+
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
+    assert JsonSessionStore(scratch.path).load("main").publication_started is True
+    monkeypatch.setattr("git_paoding.gitio.refs.ls_remote", real_ls_remote)
+    assert dict(
+        (item.ref, item.oid) for item in ls_remote(scratch.path, "origin", refs.base, refs.head)
+    ) == {refs.base: scratch.final_oid}
+
+
+def test_interruption_after_local_ref_transaction_retries_before_pr_creation(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    refs = generated_refs(branch_key("main"), "review")
+    real_ls_remote = ls_remote
+    monkeypatch.setattr(
+        "git_paoding.gitio.refs.ls_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(GitTimeoutError("interrupted")),
+    )
+
+    with pytest.raises(GitTimeoutError):
+        publish(scratch.path, backend=fake_backend)
+
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
+    assert JsonSessionStore(scratch.path).load("main").publication_started is True
+    assert _generated_local_refs(scratch.path) == (refs.base, refs.head)
+
+    monkeypatch.setattr("git_paoding.gitio.refs.ls_remote", real_ls_remote)
+    original_create = FakeBackend.create_draft_pr
+
+    def create_after_remote_repair(
+        backend: FakeBackend,
+        *,
+        title: str,
+        body: str,
+        base_ref: str,
+        head_ref: str,
+    ) -> PRRecord:
+        advertised = ls_remote(scratch.path, "origin", refs.base, refs.head)
+        assert {item.ref for item in advertised} == {refs.base, refs.head}
+        return original_create(
+            backend,
+            title=title,
+            body=body,
+            base_ref=base_ref,
+            head_ref=head_ref,
+        )
+
+    monkeypatch.setattr(FakeBackend, "create_draft_pr", create_after_remote_repair)
+
+    result = publish(scratch.path, backend=fake_backend)
+
+    assert [item.outcome for item in result.slices] == [PublishOutcome.CREATED]
+    assert fake_backend.creates == [1, 2]
 
 
 def test_publish_rejects_a_merged_integration_and_preserves_archive_identity(
