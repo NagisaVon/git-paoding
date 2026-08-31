@@ -93,6 +93,27 @@ start `gh auth login` before that confirmation.
 
 ## Classify and publish
 
+For a large diff, discover and assign the work in one bounded pass:
+
+1. Read global size and attribution counts with
+   `git-paoding status --summary --json`.
+2. Find only paths that need decisions with
+   `git-paoding status --paths --action-needed-only --json`.
+3. Inspect atoms for each relevant path with
+   `git-paoding status --path <exact-path> --json`; repeat `--path` when a
+   related group should be considered together, and add `--full` only when the
+   complete changed-hunk previews are necessary.
+4. Prepare one complete batch plan and apply it once with
+   `git-paoding assign --batch paoding-assignments.json --quiet --json`. The
+   quiet JSON keeps every assignment record and identity field while leaving
+   each `preview` string empty.
+5. Confirm the global result with `git-paoding status --summary --json` before
+   publishing.
+
+Filtered status commands still use global unassigned and ambiguous counts for
+their exit code. An empty filtered result can therefore exit `2` when work
+remains elsewhere in the session.
+
 ### 1. Inspect
 
 ```bash
