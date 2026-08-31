@@ -1,5 +1,8 @@
 # git-paoding
 
+[![PyPI](https://img.shields.io/pypi/v/git-paoding)](https://pypi.org/project/git-paoding/)
+[![Unit Tests](https://github.com/NagisaVon/git-paoding/actions/workflows/ci.yml/badge.svg)](https://github.com/NagisaVon/git-paoding/actions/workflows/ci.yml)
+
 <!-- cspell:words paoding -->
 
 Agent writes globally. Humans review locally.
