@@ -23,6 +23,7 @@ from git_paoding.core.model import (
     PRState,
     PublishResult,
     PullRequestTarget,
+    ReplaceResult,
     SessionSummary,
     SliceStatus,
     SliceSummary,
@@ -259,6 +260,93 @@ def test_init_pr_checks_backend_and_resolves_once(monkeypatch: pytest.MonkeyPatc
     assert "Source PR: #73" in result.output
     assert "Next: `git-paoding status --summary`" in result.output
     assert "Action-needed atoms:" not in result.output
+
+
+@pytest.mark.unit
+def test_init_replace_base_prints_backup_without_constructing_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    status = _status()
+    backup = tmp_path / "main.backup.json"
+    calls: list[object] = []
+
+    def fake_replace(
+        repo: Path,
+        *,
+        base: str | None,
+        pr_target: PullRequestTarget | None,
+        slice_pr_prefix: str,
+    ) -> ReplaceResult:
+        calls.append((repo, base, pr_target, slice_pr_prefix))
+        return ReplaceResult(status=status, backup_path=backup)
+
+    monkeypatch.setattr(
+        cli_main,
+        "_backend",
+        lambda repo: (_ for _ in ()).throw(AssertionError("backend must not be constructed")),
+    )
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(replace_session=fake_replace))
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["init", "--replace", "--base", "target", "--slice-prefix", "review"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [(Path.cwd(), "target", None, "review")]
+    assert f"Previous session backed up to: {backup}" in result.output
+
+
+@pytest.mark.unit
+def test_init_replace_pr_resolves_once_and_passes_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = PullRequestTarget(
+        number=73,
+        url="https://github.com/example/project/pull/73",
+        state=PRState.OPEN,
+        is_cross_repository=False,
+        base_ref_name="main",
+        base_ref_oid="1" * 40,
+        head_ref_name="feature",
+        head_ref_oid="2" * 40,
+        changed_files=1,
+        additions=2,
+        deletions=3,
+    )
+    calls: list[object] = []
+
+    class Resolver:
+        def check_ready(self) -> None:
+            calls.append("ready")
+
+        def resolve_pr_target(self, selector: str) -> PullRequestTarget:
+            calls.append(("resolve", selector))
+            return target
+
+    def fake_replace(
+        repo: Path,
+        *,
+        base: str | None,
+        pr_target: PullRequestTarget | None,
+        slice_pr_prefix: str,
+    ) -> ReplaceResult:
+        calls.append(("replace", repo, base, pr_target, slice_pr_prefix))
+        return ReplaceResult(status=_status(), backup_path=tmp_path / "backup.json")
+
+    monkeypatch.setattr(cli_main, "_backend", lambda repo: Resolver())
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(replace_session=fake_replace))
+
+    result = CliRunner().invoke(cli_main.main, ["init", "--replace", "--pr", "73"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        "ready",
+        ("resolve", "73"),
+        ("replace", Path.cwd(), None, target, "slice"),
+    ]
 
 
 @pytest.mark.unit

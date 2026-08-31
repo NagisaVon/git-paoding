@@ -16,6 +16,7 @@ from git_paoding.cli.render import (
     render_focus,
     render_init,
     render_publish,
+    render_replace,
     render_slice_added,
     render_slice_list,
     render_slice_removed,
@@ -117,19 +118,24 @@ def init_command(base: str | None, pr: str | None, replace: bool, slice_prefix: 
 
     if (base is None) == (pr is None):
         raise click.UsageError("Exactly one of --base or --pr is required")
-    if replace:
-        raise click.UsageError("--replace is not supported by this version")
     repo = Path.cwd()
     try:
+        target = None
         if pr is not None:
             backend = _backend(repo)
             backend.check_ready()
             target = backend.resolve_pr_target(pr)
-            result = _facade.init_session_from_pr(
+        if replace:
+            replacement = _facade.replace_session(
                 repo,
-                target,
+                base=base,
+                pr_target=target,
                 slice_pr_prefix=slice_prefix,
             )
+            output = render_replace(replacement)
+        elif target is not None:
+            result = _facade.init_session_from_pr(repo, target, slice_pr_prefix=slice_prefix)
+            output = render_init(result)
         else:
             assert base is not None
             result = _facade.init_session(
@@ -137,9 +143,10 @@ def init_command(base: str | None, pr: str | None, replace: bool, slice_prefix: 
                 base,
                 slice_pr_prefix=slice_prefix,
             )
+            output = render_init(result)
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
-    click.echo(render_init(result))
+    click.echo(output)
 
 
 @main.group("slice")

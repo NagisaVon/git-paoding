@@ -224,6 +224,18 @@ def update_ref(repo: Path, ref: str, new_oid: str | None, *, old_oid: str | None
     run_git(args, cwd=repo)
 
 
+def for_each_ref(
+    repo: Path,
+    prefix: str,
+    *,
+    format: str = "%(refname)",
+) -> tuple[str, ...]:
+    """Return formatted local refs below ``prefix`` in Git's stable ordering."""
+
+    result = run_git(("for-each-ref", f"--format={format}", prefix), cwd=repo)
+    return tuple(line for line in result.stdout_text().splitlines() if line)
+
+
 def ls_remote(
     repo: Path,
     remote: str,

@@ -9,6 +9,7 @@ from git_paoding.core.model import (
     Atom,
     AtomState,
     PublishResult,
+    ReplaceResult,
     SliceStatus,
     SliceSummary,
     StatusResult,
@@ -130,6 +131,12 @@ def render_init(result: StatusResult) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def render_replace(result: ReplaceResult) -> str:
+    """Render replacement status together with its recovery backup."""
+
+    return f"{render_init(result.status)}\nPrevious session backed up to: {result.backup_path}"
 
 
 def render_slice_list(result: StatusResult) -> str:

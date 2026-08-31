@@ -7,7 +7,9 @@ generation for all of these types.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -193,6 +195,7 @@ class Session(_Model):
     focus_slice: SliceId | None = None
     integration_pr: PositiveInt | None = None
     source_pr: SourcePullRequest | None = None
+    publication_started: bool = False
     archived: bool = False
 
     @model_validator(mode="after")
@@ -272,6 +275,14 @@ class StatusResult(_Model):
     unassigned_count: NonNegativeInt = 0
     ambiguous_count: NonNegativeInt = 0
     defaulted_atom_ids: list[NonEmptyString] = Field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaceResult:
+    """Successful session replacement and its recovery backup."""
+
+    status: StatusResult
+    backup_path: Path
 
 
 class AssignBatchRequest(_Model):

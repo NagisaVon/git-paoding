@@ -6,6 +6,7 @@ import pytest
 
 from conftest import ScratchRepoFactory
 from git_paoding.api import InvalidBaseRefError, init_session
+from git_paoding.core.model import SessionAlreadyExistsError
 from git_paoding.gitio.runner import run_git
 
 
@@ -67,3 +68,21 @@ def test_deprecated_backend_argument_is_ignored(
         result = init_session(scratch.path, "base", backend=backend)  # type: ignore[arg-type]
 
     assert result.session.base_oid == scratch.base_oid
+
+
+@pytest.mark.unit
+def test_duplicate_init_points_to_guarded_recovery(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    scratch = scratch_repo_factory(
+        {"app.py": "value = 1\n"},
+        {"app.py": "value = 2\n"},
+    )
+    run_git(("branch", "base", scratch.base_oid), cwd=scratch.path)
+    init_session(scratch.path, "base")
+
+    with pytest.raises(
+        SessionAlreadyExistsError,
+        match=r"use `git-paoding init --replace` for guarded wrong-base recovery",
+    ):
+        init_session(scratch.path, "base")
