@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -14,7 +15,11 @@ from git_paoding.api import add_slice, assign_batch, get_status, init_session, p
 from git_paoding.core.model import AssignBatchRequest, PublishOutcome
 from git_paoding.gitio.runner import GitResult, run_git
 from git_paoding.gitio.trace import OpCategory, collecting
-from performance.field_shape import (
+
+ROOT = Path(__file__).parents[2]
+sys.path.insert(0, str(ROOT))
+
+from scripts.field_shape import (  # noqa: E402
     ATOM_COUNT,
     CHANGED_FILE_COUNT,
     DIRECTORY_COUNT,

@@ -1,4 +1,4 @@
-"""Deterministic field-shaped repository generator for publish benchmarks."""
+"""Deterministic field-shaped repository generator for release validation."""
 
 from __future__ import annotations
 
