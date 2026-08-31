@@ -8,11 +8,13 @@ from git_paoding.core.model import (
     AssignResult,
     Atom,
     AtomState,
+    PathSummary,
     PublishResult,
     ReplaceResult,
     SliceStatus,
     SliceSummary,
     StatusResult,
+    StatusViewResult,
 )
 
 _DEFAULT_PREVIEW_LINES = 3
@@ -105,6 +107,75 @@ def render_status(result: StatusResult, *, full: bool = False) -> str:
     lines.extend(_atom_lines(action_needed, full=full))
     lines.append("Assigned/updated atoms:")
     lines.extend(_atom_lines(settled, full=full))
+    return "\n".join(lines)
+
+
+def _status_summary_lines(
+    *,
+    branch: str,
+    total_atom_count: int,
+    unassigned_count: int,
+    ambiguous_count: int,
+) -> list[str]:
+    return [
+        f"Session: {branch}",
+        f"Atoms: {total_atom_count}",
+        f"Action needed: {unassigned_count} unassigned, {ambiguous_count} ambiguous",
+    ]
+
+
+def render_status_summary(result: StatusViewResult) -> str:
+    """Render global counts without any atom or preview inventory."""
+
+    return "\n".join(
+        _status_summary_lines(
+            branch=result.session.canonical_branch,
+            total_atom_count=result.total_atom_count,
+            unassigned_count=result.unassigned_count,
+            ambiguous_count=result.ambiguous_count,
+        )
+    )
+
+
+def _path_summary_line(summary: PathSummary) -> str:
+    owners = ",".join(summary.owners) if summary.owners else "-"
+    return (
+        f"  {summary.path}  atoms={summary.atom_count} assigned={summary.assigned_count} "
+        f"unassigned={summary.unassigned_count} ambiguous={summary.ambiguous_count} "
+        f"updated={summary.updated_count} owners={owners} "
+        f"+{summary.additions} -{summary.deletions}"
+    )
+
+
+def render_status_paths(result: StatusViewResult) -> str:
+    """Render preview-free per-path attribution and diffstat totals."""
+
+    lines = _status_summary_lines(
+        branch=result.session.canonical_branch,
+        total_atom_count=result.total_atom_count,
+        unassigned_count=result.unassigned_count,
+        ambiguous_count=result.ambiguous_count,
+    )
+    lines.append("Paths:")
+    paths = result.paths or []
+    lines.extend(_path_summary_line(summary) for summary in paths)
+    if not paths:
+        lines.append("  (none)")
+    return "\n".join(lines)
+
+
+def render_status_atoms_view(result: StatusViewResult, *, full: bool = False) -> str:
+    """Render the atoms returned by an explicitly filtered status view."""
+
+    lines = _status_summary_lines(
+        branch=result.session.canonical_branch,
+        total_atom_count=result.total_atom_count,
+        unassigned_count=result.unassigned_count,
+        ambiguous_count=result.ambiguous_count,
+    )
+    lines.append(f"Returned atoms: {result.returned_atom_count}")
+    lines.append("Atoms:")
+    lines.extend(_atom_lines(result.atoms or [], full=full))
     return "\n".join(lines)
 
 
@@ -217,7 +288,20 @@ def render_publish(result: PublishResult) -> str:
     if result.action_needed:
         if result.status is None:
             return "Action needed before publishing."
-        return "Publish stopped before remote effects.\n" + render_status(result.status)
+        status = result.status
+        summary = _status_summary_lines(
+            branch=status.session.canonical_branch,
+            total_atom_count=len(status.atoms),
+            unassigned_count=status.unassigned_count,
+            ambiguous_count=status.ambiguous_count,
+        )
+        return "\n".join(
+            [
+                "Publish stopped before remote effects.",
+                *summary,
+                "Run `git-paoding status --paths --action-needed-only` to see what remains.",
+            ]
+        )
 
     lines = [
         (

@@ -1,4 +1,4 @@
-"""Golden snapshots for the three public JSON contracts."""
+"""Golden snapshots for the public JSON contracts."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from git_paoding.core.model import (
     AtomKind,
     AtomState,
     DiffStat,
+    PathSummary,
     PublishOutcome,
     PublishResult,
     PublishSliceResult,
@@ -22,6 +23,8 @@ from git_paoding.core.model import (
     SliceStatus,
     SliceSummary,
     StatusResult,
+    StatusView,
+    StatusViewResult,
 )
 
 SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
@@ -39,6 +42,7 @@ def _render_schema(model: type[BaseModel]) -> str:
         ("status.schema.json", StatusResult),
         ("assign-batch.schema.json", AssignBatchRequest),
         ("publish.schema.json", PublishResult),
+        ("status-view.schema.json", StatusViewResult),
     ],
 )
 def test_contract_schema_matches_exported_golden(filename: str, model: type[BaseModel]) -> None:
@@ -109,6 +113,31 @@ def _publish_payload() -> PublishResult:
     )
 
 
+def _status_view_payload() -> StatusViewResult:
+    return StatusViewResult(
+        view=StatusView.PATHS,
+        session=_status_payload().session,
+        slices=_status_payload().slices,
+        total_atom_count=3,
+        unassigned_count=1,
+        ambiguous_count=0,
+        returned_atom_count=2,
+        path_filters=["scenario.txt"],
+        action_needed_only=True,
+        paths=[
+            PathSummary(
+                path="scenario.txt",
+                atom_count=2,
+                assigned_count=1,
+                unassigned_count=1,
+                owners=["review"],
+                additions=2,
+                deletions=1,
+            )
+        ],
+    )
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("filename", "payload"),
@@ -116,6 +145,7 @@ def _publish_payload() -> PublishResult:
         ("status.v0.json", _status_payload()),
         ("assign-batch.v0.json", _assign_batch_payload()),
         ("publish.v0.json", _publish_payload()),
+        ("status-view.v0.json", _status_view_payload()),
     ],
 )
 def test_contract_payload_matches_v0_golden(filename: str, payload: BaseModel) -> None:
