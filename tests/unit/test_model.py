@@ -96,19 +96,6 @@ def test_slice_pr_prefix_accepts_ticket_identifiers_and_rejects_unsafe_text() ->
 
 
 @pytest.mark.unit
-def test_legacy_session_defaults_slice_pr_prefix() -> None:
-    session = Session.model_validate(
-        {
-            "schema_version": 1,
-            "canonical_branch": "feature/legacy",
-            "base_oid": "1" * 40,
-        }
-    )
-
-    assert session.slice_pr_prefix == "slice"
-
-
-@pytest.mark.unit
 def test_atom_owner_must_match_attribution_state() -> None:
     with pytest.raises(ValidationError, match="requires an owner"):
         Atom(

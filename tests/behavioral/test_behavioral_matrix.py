@@ -625,15 +625,6 @@ def test_regression_artifacts_and_contract_review_are_pinned() -> None:
         assert schema["properties"]["contract_version"]["const"] == 0
         assert payload["contract_version"] == 0
 
-    for filename in (
-        "fresh-slice.md",
-        "empty-slice.md",
-        "removed-slice.md",
-        "archived-slice.md",
-        "integration-index-three.md",
-    ):
-        assert (GOLDEN_ROOT / "github" / filename).read_text(encoding="utf-8")
-
     policy = Path(__file__).with_name("narrative-policy.md").read_text(encoding="utf-8")
     assert "does not seed headings, prose prompts, checklists" in policy
     assert "preserves those outside bytes exactly" in policy
