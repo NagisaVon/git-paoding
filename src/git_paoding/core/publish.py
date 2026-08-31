@@ -556,7 +556,12 @@ def publish_session(
                     continue
                 existing = resolved_prs.get(slice_.id)
                 if existing is not None:
-                    closed = remove_slice_pr(backend, existing.number, slice_id=slice_.id)
+                    closed = remove_slice_pr(
+                        backend,
+                        existing.number,
+                        current=existing,
+                        slice_id=slice_.id,
+                    )
                     updated_slices[index] = slice_.model_copy(update={"pr_number": closed.number})
                 removed_refs.append(generated_refs(branch, slice_.id))
             delete_projection_refs_batch(
@@ -607,6 +612,7 @@ def publish_session(
                 refreshed = rename_slice_pr(
                     backend,
                     existing.number,
+                    current=existing,
                     slice_id=slice_.id,
                     title=slice_.title,
                     prefix=session.slice_pr_prefix,
@@ -769,6 +775,7 @@ def archive_session(
                 archived_pr = archive_slice_pr(
                     backend,
                     slice_pr.number,
+                    current=slice_pr,
                     integration_pr_number=integration_pr.number,
                     integration_pr_url=integration_pr.url,
                     merged_commit=session.last_final_oid,

@@ -49,10 +49,18 @@ class GitHubBackend(Protocol):
         """Create a draft pull request and return its backend-neutral record."""
 
     def update_pr(self, number: int, *, title: str, body: str) -> PRRecord:
-        """Replace the title and body of an existing pull request."""
+        """Replace title/body and return a record reflecting the submitted change.
+
+        The record may omit concurrent third-party edits not represented by the
+        backend's most recent read.
+        """
 
     def close_pr(self, number: int) -> PRRecord:
-        """Close an existing pull request without deleting its history."""
+        """Close a pull request and return a record reflecting the submitted change.
+
+        The record may omit concurrent third-party edits not represented by the
+        backend's most recent read.
+        """
 
     def get_pr(self, number: int) -> PRRecord:
         """Return one pull request by number."""

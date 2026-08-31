@@ -164,6 +164,7 @@ class GhCliBackend:
         self.cwd = cwd
         self.executable = executable
         self.timeout = timeout
+        self._records: dict[int, PRRecord] = {}
 
     def _run(self, args: Sequence[str]) -> str:
         command_args = tuple(args)
@@ -232,7 +233,7 @@ class GhCliBackend:
         base_ref: str,
         head_ref: str,
     ) -> PRRecord:
-        """Create a Draft PR, then read it back through structured JSON."""
+        """Create a Draft PR and derive its record from the submitted values."""
 
         url = self._run(
             (
@@ -251,24 +252,52 @@ class GhCliBackend:
         ).strip()
         if not url:
             raise GhResponseError("`gh pr create` succeeded but returned no pull-request URL")
-        return self._view_pr(url)
+        match = re.search(r"/pull/(\d+)$", url)
+        if match is None:
+            raise GhResponseError(
+                f"`gh pr create` returned an unexpected pull-request URL: {url!r}"
+            )
+        created = PRRecord(
+            number=int(match.group(1)),
+            url=url,
+            title=title,
+            body=body,
+            state=PRState.OPEN,
+            is_draft=True,
+            base_ref=base_ref,
+            head_ref=head_ref,
+        )
+        self._records[created.number] = created
+        return created
 
     def update_pr(self, number: int, *, title: str, body: str) -> PRRecord:
-        """Replace title/body and return the refreshed record."""
+        """Replace title/body and reflect the submitted change in the cached record."""
 
         self._run(("pr", "edit", str(number), "--title", title, "--body", body))
-        return self.get_pr(number)
+        current = self._records.get(number)
+        if current is None:
+            return self.get_pr(number)
+        updated = current.model_copy(update={"title": title, "body": body})
+        self._records[number] = updated
+        return updated
 
     def close_pr(self, number: int) -> PRRecord:
-        """Close a PR while retaining its discussion and URL."""
+        """Close a PR while retaining its cached discussion and URL."""
 
         self._run(("pr", "close", str(number)))
-        return self.get_pr(number)
+        current = self._records.get(number)
+        if current is None:
+            return self.get_pr(number)
+        closed = current.model_copy(update={"state": PRState.CLOSED})
+        self._records[number] = closed
+        return closed
 
     def get_pr(self, number: int) -> PRRecord:
         """Read one PR through ``gh pr view --json``."""
 
-        return self._view_pr(str(number))
+        current = self._view_pr(str(number))
+        self._records[current.number] = current
+        return current
 
     def resolve_pr_target(self, selector: str) -> PullRequestTarget:
         """Resolve the metadata needed to initialize safely from an existing PR."""
@@ -331,7 +360,9 @@ class GhCliBackend:
                 f"This repository has {_OPEN_PR_LIST_LIMIT} or more open pull requests; "
                 "marker search over a truncated listing is unsafe. Close stale PRs first."
             )
-        return [_parse_pr(item) for item in payload]
+        records = [_parse_pr(item) for item in payload]
+        self._records.update((current.number, current) for current in records)
+        return records
 
     @staticmethod
     def _load_json(output: str, *, context: str) -> object:

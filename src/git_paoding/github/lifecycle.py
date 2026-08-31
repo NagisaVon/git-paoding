@@ -42,6 +42,7 @@ def rename_slice_pr(
     backend: GitHubBackend,
     number: int,
     *,
+    current: PRRecord,
     slice_id: SliceId | str,
     title: str,
     prefix: str = "slice",
@@ -52,7 +53,8 @@ def rename_slice_pr(
 ) -> PRRecord:
     """Rename and refresh a slice in place, preserving its PR identity."""
 
-    current = backend.get_pr(number)
+    if current.number != number:
+        raise ValueError("current pull-request record does not match number")
     _reject_merged_slice(current)
     desired_body = rewrite_slice_body(
         current.body,
@@ -74,11 +76,13 @@ def remove_slice_pr(
     backend: GitHubBackend,
     number: int,
     *,
+    current: PRRecord,
     slice_id: SliceId | str,
 ) -> PRRecord:
     """Close a removed slice after preserving its narrative and adding a note."""
 
-    current = backend.get_pr(number)
+    if current.number != number:
+        raise ValueError("current pull-request record does not match number")
     _reject_merged_slice(current)
     desired_body = rewrite_removed_slice_body(current.body, slice_id=slice_id)
     current = _update_if_changed(
@@ -96,6 +100,7 @@ def archive_slice_pr(
     backend: GitHubBackend,
     number: int,
     *,
+    current: PRRecord,
     integration_pr_number: int,
     integration_pr_url: str,
     merged_commit: str,
@@ -103,7 +108,8 @@ def archive_slice_pr(
 ) -> PRRecord:
     """Close one projection with a durable pointer to merged integration state."""
 
-    current = backend.get_pr(number)
+    if current.number != number:
+        raise ValueError("current pull-request record does not match number")
     _reject_merged_slice(current)
     desired_body = rewrite_archived_slice_body(
         current.body,
