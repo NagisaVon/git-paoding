@@ -1,0 +1,446 @@
+{
+  "$defs": {
+    "Atom": {
+      "additionalProperties": false,
+      "description": "One Base-anchored hunk with at most one primary owner.",
+      "properties": {
+        "atom_id": {
+          "minLength": 1,
+          "title": "Atom Id",
+          "type": "string"
+        },
+        "base_len": {
+          "minimum": 0,
+          "title": "Base Len",
+          "type": "integer"
+        },
+        "base_start": {
+          "minimum": 0,
+          "title": "Base Start",
+          "type": "integer"
+        },
+        "content_hash": {
+          "minLength": 1,
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "final_len": {
+          "minimum": 0,
+          "title": "Final Len",
+          "type": "integer"
+        },
+        "final_start": {
+          "minimum": 0,
+          "title": "Final Start",
+          "type": "integer"
+        },
+        "gap_seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Gap Seq",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/AtomKind"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "preview": {
+          "default": "",
+          "title": "Preview",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AtomState"
+        }
+      },
+      "required": [
+        "atom_id",
+        "path",
+        "kind",
+        "base_start",
+        "base_len",
+        "final_start",
+        "final_len",
+        "content_hash",
+        "state"
+      ],
+      "title": "Atom",
+      "type": "object"
+    },
+    "AtomKind": {
+      "description": "Kinds of Base-to-Final changes represented by an atom.",
+      "enum": [
+        "modify",
+        "add-file",
+        "delete-file",
+        "whole-file"
+      ],
+      "title": "AtomKind",
+      "type": "string"
+    },
+    "AtomState": {
+      "description": "Current attribution state of an atom.",
+      "enum": [
+        "assigned",
+        "unassigned",
+        "ambiguous",
+        "updated"
+      ],
+      "title": "AtomState",
+      "type": "string"
+    },
+    "DiffStat": {
+      "additionalProperties": false,
+      "description": "Compact review-size summary for a slice.",
+      "properties": {
+        "additions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Additions",
+          "type": "integer"
+        },
+        "deletions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Deletions",
+          "type": "integer"
+        },
+        "files_changed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Files Changed",
+          "type": "integer"
+        }
+      },
+      "title": "DiffStat",
+      "type": "object"
+    },
+    "PathSummary": {
+      "additionalProperties": false,
+      "description": "Preview-free attribution and diffstat totals for one changed path.",
+      "properties": {
+        "additions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Additions",
+          "type": "integer"
+        },
+        "ambiguous_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Ambiguous Count",
+          "type": "integer"
+        },
+        "assigned_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Assigned Count",
+          "type": "integer"
+        },
+        "atom_count": {
+          "minimum": 0,
+          "title": "Atom Count",
+          "type": "integer"
+        },
+        "deletions": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Deletions",
+          "type": "integer"
+        },
+        "owners": {
+          "items": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "title": "Owners",
+          "type": "array"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "unassigned_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Unassigned Count",
+          "type": "integer"
+        },
+        "updated_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Updated Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "atom_count"
+      ],
+      "title": "PathSummary",
+      "type": "object"
+    },
+    "SessionSummary": {
+      "additionalProperties": false,
+      "description": "Status-safe summary of persistent session identity.",
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "base_oid": {
+          "minLength": 1,
+          "title": "Base Oid",
+          "type": "string"
+        },
+        "base_ref": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Ref"
+        },
+        "canonical_branch": {
+          "minLength": 1,
+          "title": "Canonical Branch",
+          "type": "string"
+        },
+        "focus_slice": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Focus Slice"
+        },
+        "integration_pr": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Integration Pr"
+        },
+        "last_final_oid": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Final Oid"
+        },
+        "slice_pr_prefix": {
+          "default": "slice",
+          "maxLength": 40,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "title": "Slice Pr Prefix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "canonical_branch",
+        "base_oid"
+      ],
+      "title": "SessionSummary",
+      "type": "object"
+    },
+    "SliceStatus": {
+      "description": "Lifecycle of a semantic review slice.",
+      "enum": [
+        "active",
+        "archived"
+      ],
+      "title": "SliceStatus",
+      "type": "string"
+    },
+    "SliceSummary": {
+      "additionalProperties": false,
+      "description": "One slice entry in the status contract.",
+      "properties": {
+        "diffstat": {
+          "$ref": "#/$defs/DiffStat"
+        },
+        "id": {
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "pr_number": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pr Number"
+        },
+        "status": {
+          "$ref": "#/$defs/SliceStatus"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status"
+      ],
+      "title": "SliceSummary",
+      "type": "object"
+    },
+    "StatusView": {
+      "description": "Available compact and atom-level status projections.",
+      "enum": [
+        "summary",
+        "paths",
+        "atoms"
+      ],
+      "title": "StatusView",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Machine contract for explicitly selected scalable status views.",
+  "properties": {
+    "action_needed_only": {
+      "default": false,
+      "title": "Action Needed Only",
+      "type": "boolean"
+    },
+    "ambiguous_count": {
+      "minimum": 0,
+      "title": "Ambiguous Count",
+      "type": "integer"
+    },
+    "atoms": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/Atom"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Atoms"
+    },
+    "contract_version": {
+      "const": 0,
+      "default": 0,
+      "title": "Contract Version",
+      "type": "integer"
+    },
+    "path_filters": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Path Filters",
+      "type": "array"
+    },
+    "paths": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PathSummary"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Paths"
+    },
+    "returned_atom_count": {
+      "minimum": 0,
+      "title": "Returned Atom Count",
+      "type": "integer"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionSummary"
+    },
+    "slices": {
+      "items": {
+        "$ref": "#/$defs/SliceSummary"
+      },
+      "title": "Slices",
+      "type": "array"
+    },
+    "total_atom_count": {
+      "minimum": 0,
+      "title": "Total Atom Count",
+      "type": "integer"
+    },
+    "unassigned_count": {
+      "minimum": 0,
+      "title": "Unassigned Count",
+      "type": "integer"
+    },
+    "view": {
+      "$ref": "#/$defs/StatusView"
+    }
+  },
+  "required": [
+    "view",
+    "session",
+    "total_atom_count",
+    "unassigned_count",
+    "ambiguous_count",
+    "returned_atom_count"
+  ],
+  "title": "StatusViewResult",
+  "type": "object"
+}

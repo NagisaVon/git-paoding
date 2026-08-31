@@ -98,6 +98,14 @@ class AtomState(str, Enum):
     UPDATED = "updated"
 
 
+class StatusView(str, Enum):
+    """Available compact and atom-level status projections."""
+
+    SUMMARY = "summary"
+    PATHS = "paths"
+    ATOMS = "atoms"
+
+
 class PRState(str, Enum):
     """GitHub pull-request lifecycle state used by the backend seam."""
 
@@ -275,6 +283,37 @@ class StatusResult(_Model):
     unassigned_count: NonNegativeInt = 0
     ambiguous_count: NonNegativeInt = 0
     defaulted_atom_ids: list[NonEmptyString] = Field(default_factory=list)
+
+
+class PathSummary(_Model):
+    """Preview-free attribution and diffstat totals for one changed path."""
+
+    path: NonEmptyString
+    atom_count: NonNegativeInt
+    assigned_count: NonNegativeInt = 0
+    unassigned_count: NonNegativeInt = 0
+    ambiguous_count: NonNegativeInt = 0
+    updated_count: NonNegativeInt = 0
+    owners: list[SliceId] = Field(default_factory=list)
+    additions: NonNegativeInt = 0
+    deletions: NonNegativeInt = 0
+
+
+class StatusViewResult(_Model):
+    """Machine contract for explicitly selected scalable status views."""
+
+    contract_version: Literal[0] = CONTRACT_VERSION
+    view: StatusView
+    session: SessionSummary
+    slices: list[SliceSummary] = Field(default_factory=list)
+    total_atom_count: NonNegativeInt
+    unassigned_count: NonNegativeInt
+    ambiguous_count: NonNegativeInt
+    returned_atom_count: NonNegativeInt
+    path_filters: list[NonEmptyString] = Field(default_factory=list)
+    action_needed_only: bool = False
+    paths: list[PathSummary] | None = None
+    atoms: list[Atom] | None = None
 
 
 @dataclass(frozen=True, slots=True)

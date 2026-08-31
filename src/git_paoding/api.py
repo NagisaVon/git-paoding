@@ -15,6 +15,7 @@ from git_paoding.core.model import (
     AssignResult,
     AtomState,
     PaodingError,
+    PathSummary,
     PRState,
     PublishResult,
     PullRequestTarget,
@@ -26,6 +27,8 @@ from git_paoding.core.model import (
     SliceStatus,
     SourcePullRequest,
     StatusResult,
+    StatusView,
+    StatusViewResult,
 )
 from git_paoding.core.progress import ProgressCallback
 from git_paoding.core.publish import (
@@ -435,6 +438,88 @@ def get_full_status(
     return status
 
 
+def get_status_view(
+    repo: Path,
+    *,
+    view: StatusView,
+    paths: Sequence[str] = (),
+    action_needed_only: bool = False,
+    full: bool = False,
+    canonical_branch: str | None = None,
+) -> StatusViewResult:
+    """Return a filtered status projection without changing session state."""
+
+    repository = repo.resolve()
+    branch = _canonical_branch(repository, canonical_branch)
+    session = JsonSessionStore(repository).load(branch)
+    _session, _replay_atoms, status = reconcile_and_status(
+        repository,
+        session,
+        full=full and view is StatusView.ATOMS,
+    )
+    path_filters = list(paths)
+    matching_atoms = [
+        atom for atom in status.atoms if not path_filters or atom.path in path_filters
+    ]
+
+    path_summaries: list[PathSummary] | None = None
+    atoms = None
+    returned_atom_count = 0
+    if view is StatusView.PATHS:
+        summaries: list[PathSummary] = []
+        for path in sorted({atom.path for atom in matching_atoms}):
+            path_atoms = [atom for atom in matching_atoms if atom.path == path]
+            summary = PathSummary(
+                path=path,
+                atom_count=len(path_atoms),
+                assigned_count=sum(atom.state is AtomState.ASSIGNED for atom in path_atoms),
+                unassigned_count=sum(atom.state is AtomState.UNASSIGNED for atom in path_atoms),
+                ambiguous_count=sum(atom.state is AtomState.AMBIGUOUS for atom in path_atoms),
+                updated_count=sum(atom.state is AtomState.UPDATED for atom in path_atoms),
+                owners=sorted({atom.owner for atom in path_atoms if atom.owner is not None}),
+                additions=sum(atom.final_len for atom in path_atoms),
+                deletions=sum(atom.base_len for atom in path_atoms),
+            )
+            if not action_needed_only or summary.unassigned_count + summary.ambiguous_count:
+                summaries.append(summary)
+        path_summaries = summaries
+        returned_atom_count = sum(summary.atom_count for summary in summaries)
+    elif view is StatusView.ATOMS:
+        if action_needed_only:
+            matching_atoms = [
+                atom
+                for atom in matching_atoms
+                if atom.state in {AtomState.UNASSIGNED, AtomState.AMBIGUOUS}
+            ]
+        atoms = matching_atoms
+        returned_atom_count = len(atoms)
+
+    return StatusViewResult(
+        view=view,
+        session=status.session,
+        slices=status.slices,
+        total_atom_count=len(status.atoms),
+        unassigned_count=status.unassigned_count,
+        ambiguous_count=status.ambiguous_count,
+        returned_atom_count=returned_atom_count,
+        path_filters=path_filters,
+        action_needed_only=action_needed_only,
+        paths=path_summaries,
+        atoms=atoms,
+    )
+
+
+def strip_previews(result: AssignResult) -> AssignResult:
+    """Return an assignment result with every record preview blanked."""
+
+    return result.model_copy(
+        update={
+            "assigned": [record.model_copy(update={"preview": ""}) for record in result.assigned],
+            "skipped": [record.model_copy(update={"preview": ""}) for record in result.skipped],
+        }
+    )
+
+
 def assign(
     repo: Path,
     slice_id: str,
@@ -649,10 +734,12 @@ __all__ = [
     "assign_batch",
     "get_full_status",
     "get_status",
+    "get_status_view",
     "init_session",
     "InvalidBaseRefError",
     "publish",
     "remove_slice",
     "rename_slice",
     "set_focus",
+    "strip_previews",
 ]

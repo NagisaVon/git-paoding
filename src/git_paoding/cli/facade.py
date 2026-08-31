@@ -14,6 +14,8 @@ from git_paoding.core.model import (
     PullRequestTarget,
     ReplaceResult,
     StatusResult,
+    StatusView,
+    StatusViewResult,
 )
 from git_paoding.core.progress import ProgressCallback
 from git_paoding.github.backend import GitHubBackend
@@ -56,6 +58,16 @@ class CliFacade(Protocol):
     def rename_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult: ...
 
     def get_status(self, repo: Path, *, full: bool) -> StatusResult: ...
+
+    def get_status_view(
+        self,
+        repo: Path,
+        *,
+        view: StatusView,
+        paths: Sequence[str],
+        action_needed_only: bool,
+        full: bool,
+    ) -> StatusViewResult: ...
 
     def assign(
         self,
@@ -145,6 +157,23 @@ class ApiFacade:
         if full:
             return api.get_full_status(repo)
         return api.get_status(repo)
+
+    def get_status_view(
+        self,
+        repo: Path,
+        *,
+        view: StatusView,
+        paths: Sequence[str],
+        action_needed_only: bool,
+        full: bool,
+    ) -> StatusViewResult:
+        return api.get_status_view(
+            repo,
+            view=view,
+            paths=paths,
+            action_needed_only=action_needed_only,
+            full=full,
+        )
 
     def assign(
         self,

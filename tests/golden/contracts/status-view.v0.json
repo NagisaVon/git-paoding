@@ -1,0 +1,51 @@
+{
+  "contract_version": 0,
+  "view": "paths",
+  "session": {
+    "canonical_branch": "feature/review-slices",
+    "base_ref": "origin/main",
+    "base_oid": "1111111111111111111111111111111111111111",
+    "slice_pr_prefix": "slice",
+    "last_final_oid": "2222222222222222222222222222222222222222",
+    "focus_slice": null,
+    "integration_pr": 41,
+    "archived": false
+  },
+  "slices": [
+    {
+      "id": "review",
+      "title": "Review behavior",
+      "status": "active",
+      "pr_number": 42,
+      "diffstat": {
+        "files_changed": 1,
+        "additions": 1,
+        "deletions": 1
+      }
+    }
+  ],
+  "total_atom_count": 3,
+  "unassigned_count": 1,
+  "ambiguous_count": 0,
+  "returned_atom_count": 2,
+  "path_filters": [
+    "scenario.txt"
+  ],
+  "action_needed_only": true,
+  "paths": [
+    {
+      "path": "scenario.txt",
+      "atom_count": 2,
+      "assigned_count": 1,
+      "unassigned_count": 1,
+      "ambiguous_count": 0,
+      "updated_count": 0,
+      "owners": [
+        "review"
+      ],
+      "additions": 2,
+      "deletions": 1
+    }
+  ],
+  "atoms": null
+}
