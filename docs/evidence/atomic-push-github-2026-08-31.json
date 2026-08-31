@@ -1,0 +1,147 @@
+{
+  "atomic_exact_lease_update_verified": true,
+  "atomic_transport_supported": true,
+  "cleanup": {
+    "attempted": true,
+    "completed_at": "2026-08-31T19:14:09.846226+00:00",
+    "failed_refs": [],
+    "final_remote_oids": {},
+    "observed_oids": {
+      "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first": "c38f561f654c42de91217fabfa773e1795e1e16a",
+      "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second": "b423ce973daf8346015e00ebd0716b7a1b1c35d8"
+    },
+    "refused_unexpected_oids": {},
+    "started_at": "2026-08-31T19:14:06.621852+00:00",
+    "status": "cleaned"
+  },
+  "commands": [
+    {
+      "completed_at": "2026-08-31T19:14:01.868663+00:00",
+      "duration_seconds": 0.461529,
+      "failure_category": null,
+      "operation": "gh-validate-private-scratch-target",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:01.407161+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:01.898197+00:00",
+      "duration_seconds": 0.029355,
+      "failure_category": null,
+      "operation": "git-resolve-probe-newer-oid",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:01.868850+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:01.915913+00:00",
+      "duration_seconds": 0.017687,
+      "failure_category": null,
+      "operation": "git-resolve-probe-older-oid",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:01.898266+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:02.546449+00:00",
+      "duration_seconds": 0.630371,
+      "failure_category": null,
+      "operation": "git-confirm-probe-namespace-absent",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:01.916128+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:04.379088+00:00",
+      "duration_seconds": 1.832398,
+      "failure_category": null,
+      "operation": "git-push-atomic-create-two-probe-refs",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:02.546743+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:04.869660+00:00",
+      "duration_seconds": 0.490358,
+      "failure_category": null,
+      "operation": "git-observe-created-probe-refs",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:04.379322+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:06.124981+00:00",
+      "duration_seconds": 1.255127,
+      "failure_category": null,
+      "operation": "git-push-atomic-update-with-exact-leases",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:04.869895+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:06.621636+00:00",
+      "duration_seconds": 0.496594,
+      "failure_category": null,
+      "operation": "git-verify-atomic-lease-update",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:06.125125+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:07.065706+00:00",
+      "duration_seconds": 0.443871,
+      "failure_category": null,
+      "operation": "git-observe-probe-refs-for-cleanup",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:06.621921+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:08.220170+00:00",
+      "duration_seconds": 1.154248,
+      "failure_category": null,
+      "operation": "git-delete-probe-ref-with-exact-lease",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:07.065968+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:09.365810+00:00",
+      "duration_seconds": 1.145514,
+      "failure_category": null,
+      "operation": "git-delete-probe-ref-with-exact-lease",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:08.220356+00:00"
+    },
+    {
+      "completed_at": "2026-08-31T19:14:09.846097+00:00",
+      "duration_seconds": 0.480197,
+      "failure_category": null,
+      "operation": "git-verify-probe-ref-cleanup",
+      "returncode": 0,
+      "started_at": "2026-08-31T19:14:09.365967+00:00"
+    }
+  ],
+  "completed_at": "2026-08-31T19:14:09.846245+00:00",
+  "evidence_version": 1,
+  "fallback_constant_changed": false,
+  "fallback_constant_should_remain_off": true,
+  "initial_desired_oids": {
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first": "b423ce973daf8346015e00ebd0716b7a1b1c35d8",
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second": "c38f561f654c42de91217fabfa773e1795e1e16a"
+  },
+  "lease_desired_oids": {
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first": "c38f561f654c42de91217fabfa773e1795e1e16a",
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second": "b423ce973daf8346015e00ebd0716b7a1b1c35d8"
+  },
+  "observed_oids": {
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first": "b423ce973daf8346015e00ebd0716b7a1b1c35d8",
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second": "c38f561f654c42de91217fabfa773e1795e1e16a"
+  },
+  "probe_refs": [
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first",
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second"
+  ],
+  "probe_result": "supported",
+  "remote_final_oids": {
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/first": "c38f561f654c42de91217fabfa773e1795e1e16a",
+    "refs/heads/git-paoding-probes/atomic-push/20260831T191401406472Z-4a906db2f86139d5/second": "b423ce973daf8346015e00ebd0716b7a1b1c35d8"
+  },
+  "scenario": "atomic two-ref exact-lease push capability probe",
+  "scratch_repo": "NagisaVon/git-paoding-v010-release-live-20260831-0600",
+  "scratch_repo_visibility": "private",
+  "scratch_target_validated": true,
+  "source_commit": "c38f561f654c42de91217fabfa773e1795e1e16a",
+  "source_parent_commit": "b423ce973daf8346015e00ebd0716b7a1b1c35d8",
+  "started_at": "2026-08-31T19:14:01.407147+00:00"
+}
