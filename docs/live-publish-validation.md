@@ -38,3 +38,35 @@ empty-slice, integration-PR, and exit-status behavior, and the frozen interface 
 
 The accepted 2026-08-29 run is recorded in
 `docs/evidence/live-publish-validation-2026-08-29.md`.
+
+## Atomic two-ref push probe
+
+The script also has an isolated capability-probe mode for an owner-authorized existing
+validation repository. The target must be private, unarchived, match the exact `OWNER/NAME`
+argument, and retain the description created by this script. Unlike the five-stage workflow,
+this mode does not create a repository or any pull requests.
+
+Run it only after the repository owner separately authorizes the live probe:
+
+```bash
+uv run python scripts/live_publish_validation.py \
+  --atomic-push-probe \
+  --probe-repo OWNER/git-paoding-live-publish-YYYYMMDD-HHMMSS \
+  --evidence docs/evidence/atomic-push-probe-YYYY-MM-DD.json
+```
+
+The probe resolves two existing commits from the source checkout and uses a random namespace
+under `refs/heads/git-paoding-probes/atomic-push/`. It first creates two throwaway refs with one
+`git push --atomic`, observes their exact remote OIDs, then swaps their desired OIDs with a
+second atomic push carrying an exact `--force-with-lease=<ref>:<observed-oid>` for each ref.
+Canonical branches and `refs/heads/paoding/` generated refs are never destinations.
+
+On success or failure, cleanup re-reads each probe ref and deletes it only when its OID is one
+of the two expected source commits, using an exact lease for each deletion. A changed or
+unrecognized ref is left untouched and reported as a cleanup failure. The JSON evidence file is
+required to be a new file directly under `docs/evidence/`; it records only sanitized operation
+names, timestamps, return codes, observed/desired/final OIDs, capability outcome, and cleanup
+status. Commands, credentials, raw remote URLs, stdout, and stderr are not persisted or printed.
+
+A fully successful probe supports keeping the atomic-push fallback disabled. The probe records
+that conclusion but never changes the fallback constant itself.

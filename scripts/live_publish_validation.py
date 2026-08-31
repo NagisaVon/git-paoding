@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Run the five-step publish validation against a newly created GitHub scratch repo.
+"""Run live publishing validation or an isolated atomic-push capability probe.
 
 This is a manual, networked workflow. It is intentionally excluded from pytest/CI.
-The created private repository and its Draft PRs are preserved for human audit.
+The full workflow creates and preserves a private repository and its Draft PRs. The
+atomic-push mode requires an existing private validation repository and cleans up its
+unique throwaway refs.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -20,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Sequence, cast
 
 CANONICAL_BRANCH = "feature/live-publish-validation"
 SLICE_A = "review"
@@ -44,12 +48,38 @@ stable_08 = true
 beta = "base"
 """
 
+PROBE_REF_ROOT = "refs/heads/git-paoding-probes/atomic-push"
+PRIVATE_SCRATCH_DESCRIPTION = (
+    "Disposable-but-preserved git-paoding live publish validation evidence"
+)
+_REPO_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_OPERATION_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
     stdout: str
     stderr: str
     returncode: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeRefs:
+    """Unique remote refs used only by one atomic-push probe."""
+
+    first: str
+    second: str
+
+    def as_tuple(self) -> tuple[str, str]:
+        return self.first, self.second
+
+
+@dataclass(frozen=True, slots=True)
+class ProbePushPlan:
+    """Pure description of one two-ref push and its expected remote result."""
+
+    args: tuple[str, ...]
+    expected_oids: dict[str, str]
 
 
 class ValidationFailure(RuntimeError):
@@ -104,6 +134,410 @@ def sha256_text(value: str) -> str:
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def validate_repo_slug(repo_slug: str) -> str:
+    """Accept only an explicit GitHub owner/name pair safe for URL construction."""
+
+    if not _REPO_SLUG_PATTERN.fullmatch(repo_slug):
+        fail("probe repository must be an explicit GitHub OWNER/NAME slug")
+    return repo_slug
+
+
+def validate_oid(oid: str) -> str:
+    """Accept Git SHA-1 or SHA-256 object names without revision syntax."""
+
+    require(bool(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", oid)), "invalid probe object OID")
+    return oid
+
+
+def validate_private_scratch_target(payload: object, *, expected_slug: str) -> None:
+    """Refuse any repository except the explicitly named private validation target."""
+
+    require(isinstance(payload, dict), "probe repository metadata was not an object")
+    metadata = cast(dict[str, object], payload)
+    require(metadata.get("nameWithOwner") == expected_slug, "probe repository identity mismatch")
+    require(metadata.get("visibility") == "PRIVATE", "probe repository is not private")
+    require(metadata.get("isArchived") is False, "probe repository is archived")
+    require(
+        metadata.get("description") == PRIVATE_SCRATCH_DESCRIPTION,
+        "probe repository does not have the live-validation scratch description",
+    )
+
+
+def make_probe_refs(timestamp: str, nonce: str) -> ProbeRefs:
+    """Build a collision-resistant namespace disjoint from product-generated refs."""
+
+    safe_timestamp = re.sub(r"[^0-9A-Za-z-]", "-", timestamp).strip("-")
+    require(bool(safe_timestamp), "probe timestamp did not contain a safe character")
+    require(bool(re.fullmatch(r"[0-9a-f]+", nonce)), "probe nonce must be lowercase hex")
+    namespace = f"{PROBE_REF_ROOT}/{safe_timestamp}-{nonce}"
+    refs = ProbeRefs(first=f"{namespace}/first", second=f"{namespace}/second")
+    validate_probe_refs(refs)
+    return refs
+
+
+def validate_probe_refs(refs: ProbeRefs) -> None:
+    """Keep cleanup and push targets inside the dedicated throwaway namespace."""
+
+    require(refs.first != refs.second, "probe refs must be distinct")
+    require(
+        refs.first.rsplit("/", maxsplit=1)[0] == refs.second.rsplit("/", maxsplit=1)[0],
+        "probe refs must share one unique namespace",
+    )
+    for ref in refs.as_tuple():
+        validate_probe_ref(ref)
+
+
+def validate_probe_ref(ref: str) -> None:
+    """Reject deletion or update targets outside the probe namespace."""
+
+    prefix = f"{PROBE_REF_ROOT}/"
+    require(ref.startswith(prefix), f"unsafe probe ref outside {prefix}")
+    require(ref.endswith(("/first", "/second")), "probe ref has an unexpected suffix")
+    require("/paoding/" not in ref, "probe ref overlaps product-generated refs")
+
+
+def build_atomic_create_push(
+    remote_url: str,
+    refs: ProbeRefs,
+    *,
+    first_oid: str,
+    second_oid: str,
+) -> ProbePushPlan:
+    """Build the first atomic creation of both probe refs."""
+
+    validate_probe_refs(refs)
+    validate_oid(first_oid)
+    validate_oid(second_oid)
+    return ProbePushPlan(
+        args=(
+            "git",
+            "push",
+            "--atomic",
+            remote_url,
+            f"{first_oid}:{refs.first}",
+            f"{second_oid}:{refs.second}",
+        ),
+        expected_oids={refs.first: first_oid, refs.second: second_oid},
+    )
+
+
+def build_atomic_lease_push(
+    remote_url: str,
+    refs: ProbeRefs,
+    *,
+    observed_oids: dict[str, str],
+    desired_oids: dict[str, str],
+) -> ProbePushPlan:
+    """Build a two-ref atomic update with one exact lease per destination."""
+
+    validate_probe_refs(refs)
+    require(set(observed_oids) == set(refs.as_tuple()), "observed OIDs do not cover both refs")
+    require(set(desired_oids) == set(refs.as_tuple()), "desired OIDs do not cover both refs")
+    for oid in (*observed_oids.values(), *desired_oids.values()):
+        validate_oid(oid)
+    lease_args = tuple(f"--force-with-lease={ref}:{observed_oids[ref]}" for ref in refs.as_tuple())
+    refspecs = tuple(f"{desired_oids[ref]}:{ref}" for ref in refs.as_tuple())
+    return ProbePushPlan(
+        args=("git", "push", "--atomic", *lease_args, remote_url, *refspecs),
+        expected_oids=dict(desired_oids),
+    )
+
+
+def build_exact_lease_delete(remote_url: str, ref: str, observed_oid: str) -> tuple[str, ...]:
+    """Build a deletion that cannot remove a ref changed by another actor."""
+
+    validate_probe_ref(ref)
+    validate_oid(observed_oid)
+    return (
+        "git",
+        "push",
+        f"--force-with-lease={ref}:{observed_oid}",
+        remote_url,
+        f":{ref}",
+    )
+
+
+def parse_remote_oids(output: str, *, allowed_refs: Sequence[str]) -> dict[str, str]:
+    """Parse exact ls-remote rows while rejecting duplicates and unrelated refs."""
+
+    allowed = set(allowed_refs)
+    parsed: dict[str, str] = {}
+    for line in output.splitlines():
+        cells = line.split("\t", maxsplit=1)
+        require(len(cells) == 2, "probe ls-remote returned a malformed row")
+        oid, ref = cells
+        require(ref in allowed, f"probe ls-remote returned unexpected ref {ref!r}")
+        require(ref not in parsed, f"probe ls-remote returned duplicate ref {ref!r}")
+        parsed[ref] = validate_oid(oid)
+    return parsed
+
+
+def atomic_failure_category(stderr: str) -> str:
+    """Classify atomic capability failures without retaining sensitive diagnostics."""
+
+    normalized = stderr.casefold()
+    if "does not support --atomic" in normalized or "atomic push is not supported" in normalized:
+        return "atomic-not-supported"
+    return "command-failed"
+
+
+def validate_probe_evidence_path(source: Path, evidence_path: Path) -> Path:
+    """Require live probe evidence to be a new JSON file under docs/evidence."""
+
+    evidence_root = (source / "docs" / "evidence").resolve()
+    resolved = evidence_path.resolve()
+    require(resolved.parent == evidence_root, "probe evidence must be written under docs/evidence")
+    require(resolved.suffix == ".json", "probe evidence must be a JSON file")
+    require(not resolved.exists(), "probe evidence path already exists")
+    return resolved
+
+
+class AtomicPushProbe:
+    """Run a self-cleaning two-ref atomic and exact-lease capability probe."""
+
+    def __init__(self, source: Path, evidence_path: Path, repo_slug: str) -> None:
+        self.source = source.resolve()
+        self.evidence_path = validate_probe_evidence_path(self.source, evidence_path)
+        self.repo_slug = validate_repo_slug(repo_slug)
+        self.remote_url = f"https://github.com/{self.repo_slug}.git"
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        self.refs = make_probe_refs(timestamp, secrets.token_hex(8))
+        self.commands: list[dict[str, Any]] = []
+        self.target_validated = False
+        self.cleanup_eligible = False
+        self.allowed_oids: set[str] = set()
+        self.evidence: dict[str, Any] = {
+            "evidence_version": 1,
+            "scenario": "atomic two-ref exact-lease push capability probe",
+            "started_at": utc_now(),
+            "scratch_repo": self.repo_slug,
+            "probe_refs": list(self.refs.as_tuple()),
+            "commands": self.commands,
+            "atomic_transport_supported": None,
+            "atomic_exact_lease_update_verified": False,
+            "probe_result": "pending",
+            "fallback_constant_should_remain_off": False,
+            "fallback_constant_changed": False,
+        }
+
+    def _run(self, operation: str, args: Sequence[str]) -> CommandResult:
+        require(
+            bool(_OPERATION_PATTERN.fullmatch(operation)),
+            "probe operation name must be a sanitized kebab-case identifier",
+        )
+        print(f"$ [{operation}]", flush=True)
+        started_at = utc_now()
+        started = time.perf_counter()
+        os_error = False
+        command_env = os.environ.copy()
+        command_env["GIT_TERMINAL_PROMPT"] = "0"
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=self.source,
+                env=command_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            result = CommandResult(
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                returncode=completed.returncode,
+            )
+        except OSError:
+            os_error = True
+            result = CommandResult(stdout="", stderr="", returncode=127)
+        self.commands.append(
+            {
+                "operation": operation,
+                "started_at": started_at,
+                "completed_at": utc_now(),
+                "duration_seconds": round(time.perf_counter() - started, 6),
+                "returncode": result.returncode,
+                "failure_category": (
+                    "executable-unavailable"
+                    if os_error
+                    else atomic_failure_category(result.stderr)
+                    if result.returncode != 0
+                    else None
+                ),
+            }
+        )
+        return result
+
+    def _require_success(self, operation: str, result: CommandResult) -> None:
+        if result.returncode != 0:
+            category = atomic_failure_category(result.stderr)
+            fail(f"probe operation {operation!r} failed ({category})")
+
+    def _remote_oids(self, operation: str) -> dict[str, str]:
+        result = self._run(
+            operation,
+            ("git", "ls-remote", self.remote_url, *self.refs.as_tuple()),
+        )
+        self._require_success(operation, result)
+        return parse_remote_oids(result.stdout, allowed_refs=self.refs.as_tuple())
+
+    def _validate_target(self) -> None:
+        operation = "gh-validate-private-scratch-target"
+        result = self._run(
+            operation,
+            (
+                "gh",
+                "repo",
+                "view",
+                self.repo_slug,
+                "--json",
+                "nameWithOwner,visibility,isArchived,description",
+            ),
+        )
+        self._require_success(operation, result)
+        try:
+            payload: object = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            fail("private scratch target lookup returned invalid JSON")
+        validate_private_scratch_target(payload, expected_slug=self.repo_slug)
+        self.target_validated = True
+        self.evidence["scratch_repo_visibility"] = "private"
+        self.evidence["scratch_target_validated"] = True
+
+    def _resolve_source_oids(self) -> tuple[str, str]:
+        newer_result = self._run(
+            "git-resolve-probe-newer-oid",
+            ("git", "rev-parse", "--verify", "HEAD^{commit}"),
+        )
+        self._require_success("git-resolve-probe-newer-oid", newer_result)
+        older_result = self._run(
+            "git-resolve-probe-older-oid",
+            ("git", "rev-parse", "--verify", "HEAD^1^{commit}"),
+        )
+        self._require_success("git-resolve-probe-older-oid", older_result)
+        newer_oid = newer_result.stdout.strip()
+        older_oid = older_result.stdout.strip()
+        for oid in (newer_oid, older_oid):
+            validate_oid(oid)
+        require(newer_oid != older_oid, "probe requires two distinct source commit OIDs")
+        self.allowed_oids = {newer_oid, older_oid}
+        self.evidence["source_commit"] = newer_oid
+        self.evidence["source_parent_commit"] = older_oid
+        return older_oid, newer_oid
+
+    def _cleanup(self) -> None:
+        should_attempt = self.target_validated and self.cleanup_eligible
+        cleanup: dict[str, Any] = {
+            "started_at": utc_now(),
+            "attempted": should_attempt,
+            "status": "not-needed" if not should_attempt else "pending",
+        }
+        self.evidence["cleanup"] = cleanup
+        if not should_attempt:
+            cleanup["completed_at"] = utc_now()
+            return
+        try:
+            before = self._remote_oids("git-observe-probe-refs-for-cleanup")
+            cleanup["observed_oids"] = before
+            refused: dict[str, str] = {}
+            failed: list[str] = []
+            for ref, oid in before.items():
+                if oid not in self.allowed_oids:
+                    refused[ref] = oid
+                    continue
+                result = self._run(
+                    "git-delete-probe-ref-with-exact-lease",
+                    build_exact_lease_delete(self.remote_url, ref, oid),
+                )
+                if result.returncode != 0:
+                    failed.append(ref)
+            after = self._remote_oids("git-verify-probe-ref-cleanup")
+            cleanup["final_remote_oids"] = after
+            cleanup["refused_unexpected_oids"] = refused
+            cleanup["failed_refs"] = failed
+            cleanup["status"] = "cleaned" if not after and not refused and not failed else "failed"
+        except ValidationFailure as error:
+            cleanup["status"] = "unknown"
+            cleanup["failure"] = str(error)
+        finally:
+            cleanup["completed_at"] = utc_now()
+
+    def _write_evidence(self) -> None:
+        self.evidence["completed_at"] = utc_now()
+        self.evidence_path.write_text(
+            json.dumps(self.evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Evidence: {self.evidence_path}")
+
+    def execute(self) -> None:
+        failure: ValidationFailure | None = None
+        try:
+            self._validate_target()
+            older_oid, newer_oid = self._resolve_source_oids()
+            before = self._remote_oids("git-confirm-probe-namespace-absent")
+            require(not before, "unique probe namespace unexpectedly already exists")
+
+            initial = build_atomic_create_push(
+                self.remote_url,
+                self.refs,
+                first_oid=older_oid,
+                second_oid=newer_oid,
+            )
+            self.evidence["initial_desired_oids"] = initial.expected_oids
+            self.cleanup_eligible = True
+            initial_result = self._run("git-push-atomic-create-two-probe-refs", initial.args)
+            if initial_result.returncode != 0:
+                category = atomic_failure_category(initial_result.stderr)
+                self.evidence["atomic_transport_supported"] = (
+                    False if category == "atomic-not-supported" else None
+                )
+                fail(f"initial atomic push failed ({category})")
+            self.evidence["atomic_transport_supported"] = True
+
+            observed = self._remote_oids("git-observe-created-probe-refs")
+            self.evidence["observed_oids"] = observed
+            require(
+                observed == initial.expected_oids, "initial atomic push produced unexpected OIDs"
+            )
+
+            desired = {self.refs.first: newer_oid, self.refs.second: older_oid}
+            lease_update = build_atomic_lease_push(
+                self.remote_url,
+                self.refs,
+                observed_oids=observed,
+                desired_oids=desired,
+            )
+            self.evidence["lease_desired_oids"] = desired
+            lease_result = self._run(
+                "git-push-atomic-update-with-exact-leases",
+                lease_update.args,
+            )
+            self._require_success("git-push-atomic-update-with-exact-leases", lease_result)
+            final_oids = self._remote_oids("git-verify-atomic-lease-update")
+            self.evidence["remote_final_oids"] = final_oids
+            require(final_oids == desired, "atomic exact-lease push produced unexpected OIDs")
+            self.evidence["atomic_exact_lease_update_verified"] = True
+        except ValidationFailure as error:
+            failure = error
+            self.evidence["failure"] = str(error)
+        finally:
+            self._cleanup()
+            cleanup_succeeded = self.evidence["cleanup"]["status"] == "cleaned"
+            if failure is None and not cleanup_succeeded:
+                failure = ValidationFailure("probe cleanup did not complete safely")
+                self.evidence["failure"] = str(failure)
+            probe_succeeded = (
+                failure is None
+                and self.evidence["atomic_exact_lease_update_verified"] is True
+                and cleanup_succeeded
+            )
+            self.evidence["probe_result"] = "supported" if probe_succeeded else "failed"
+            self.evidence["fallback_constant_should_remain_off"] = probe_succeeded
+            self._write_evidence()
+        if failure is not None:
+            raise failure
 
 
 class Scenario:
@@ -165,7 +599,7 @@ class Scenario:
         after = self.repo_snapshot()
         require(before == after, "publish changed canonical HEAD/tree/branch or working tree")
         self.isolation_checks.append({"before": before, "after": after, "passed": True})
-        return payload
+        return cast(dict[str, Any], payload)
 
     def remote_oid(self, short_ref: str) -> str:
         full_ref = f"refs/heads/{short_ref}"
@@ -203,12 +637,12 @@ class Scenario:
     def pull(self, number: int) -> dict[str, Any]:
         payload = self.api(f"repos/{self.repo_slug}/pulls/{number}")
         require(isinstance(payload, dict), "pull response was not an object")
-        return payload
+        return cast(dict[str, Any], payload)
 
     def pull_files(self, number: int) -> list[dict[str, Any]]:
         payload = self.api(f"repos/{self.repo_slug}/pulls/{number}/files")
         require(isinstance(payload, list), "pull files response was not a list")
-        return payload
+        return cast(list[dict[str, Any]], payload)
 
     def pr_snapshot(self, number: int) -> dict[str, Any]:
         pr = self.pull(number)
@@ -567,6 +1001,7 @@ class Scenario:
                 break
             time.sleep(2)
         require(survived is not None, "inline comment became outdated or disappeared after refresh")
+        assert survived is not None
         self.evidence["steps"]["5_inline_comment_survival"] = {
             "slice_a_pr_number": slice_number,
             "slice_a_pr_url": refreshed_a["html_url"],
@@ -670,16 +1105,51 @@ def parser() -> argparse.ArgumentParser:
         "--repo-name",
         help="optional new repository name; default includes a UTC timestamp",
     )
+    result.add_argument(
+        "--atomic-push-probe",
+        action="store_true",
+        help="run only the self-cleaning atomic two-ref exact-lease capability probe",
+    )
+    result.add_argument(
+        "--probe-repo",
+        help="existing private live-validation scratch repository as OWNER/NAME",
+    )
     return result
 
 
 def main() -> int:
     args = parser().parse_args()
-    scenario = Scenario(args.source, args.evidence, args.repo_name)
+    scenario: Scenario | AtomicPushProbe | None = None
+    if args.atomic_push_probe:
+        if not args.probe_repo:
+            print(
+                "LIVE VALIDATION FAILED: --atomic-push-probe requires --probe-repo", file=sys.stderr
+            )
+            return 1
+        if args.repo_name:
+            print(
+                "LIVE VALIDATION FAILED: --repo-name cannot be used with --atomic-push-probe",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        if args.probe_repo:
+            print(
+                "LIVE VALIDATION FAILED: --probe-repo requires --atomic-push-probe", file=sys.stderr
+            )
+            return 1
     try:
+        if args.atomic_push_probe:
+            scenario = AtomicPushProbe(
+                args.source,
+                args.evidence,
+                args.probe_repo,
+            )
+        else:
+            scenario = Scenario(args.source, args.evidence, args.repo_name)
         scenario.execute()
     except Exception as error:
-        if scenario.repo_url:
+        if isinstance(scenario, Scenario) and scenario.repo_url:
             print(f"Scratch repo retained after failure: {scenario.repo_url}", file=sys.stderr)
         print(f"LIVE VALIDATION FAILED: {error}", file=sys.stderr)
         return 1
