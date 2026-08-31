@@ -51,7 +51,12 @@ from git_paoding.gitio.plumbing import (
     mktree,
     update_ref,
 )
-from git_paoding.gitio.refs import GeneratedRefs, RefSyncResult, generated_refs
+from git_paoding.gitio.refs import (
+    GeneratedRefs,
+    RefSyncResult,
+    generated_refs,
+    sync_projection_refs,
+)
 from git_paoding.gitio.runner import run_git
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 
@@ -865,9 +870,7 @@ def test_publish_persists_started_before_first_generated_ref_operation(
     scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
     assign(scratch.path, "review", ["app.py"])
 
-    import git_paoding.core.publish as publish_module
-
-    original_sync = publish_module.sync_projection_refs
+    original_sync = sync_projection_refs
     observed_flags: list[bool] = []
 
     def observe_sync(
@@ -889,7 +892,7 @@ def test_publish_persists_started_before_first_generated_ref_operation(
             timeout=timeout,
         )
 
-    monkeypatch.setattr(publish_module, "sync_projection_refs", observe_sync)
+    monkeypatch.setattr("git_paoding.core.publish.sync_projection_refs", observe_sync)
 
     publish(scratch.path, backend=fake_backend)
 
