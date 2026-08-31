@@ -12,6 +12,7 @@ from git_paoding.core.model import PRState
 from git_paoding.github.gh_cli import (
     GhAuthenticationError,
     GhCliBackend,
+    GhCommandError,
     GhNetworkError,
     GhNotFoundError,
     GhRateLimitError,
@@ -255,6 +256,76 @@ def test_ready_check_maps_auth_failure_to_guidance(monkeypatch: pytest.MonkeyPat
         GhCliBackend(Path(".")).check_ready()
 
     assert [call[1:] for call in calls] == [("--version",), ("auth", "status")]
+
+
+@pytest.mark.unit
+def test_ready_check_preserves_unclassified_auth_status_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = "an unexpected auth status failure"
+
+    def fake_run(
+        args: tuple[str, ...],
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[str]:
+        if args[1:] == ("--version",):
+            return subprocess.CompletedProcess(args, 0, "gh version 2.80.0 (test)\n", "")
+        return subprocess.CompletedProcess(args, 1, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(GhCommandError) as caught:
+        GhCliBackend(Path(".")).check_ready()
+
+    assert caught.value.stderr == stderr
+    assert stderr in str(caught.value)
+    assert "gh auth login" not in str(caught.value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Could not resolve host: api.github.com",
+        "connect: connection refused",
+        "net/http: TLS handshake timeout",
+        "dial tcp: i/o timeout",
+    ],
+)
+def test_transport_failures_map_to_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fail)
+
+    with pytest.raises(GhNetworkError, match="sandbox or network policy"):
+        GhCliBackend(Path(".")).get_pr(999)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "not logged into any GitHub hosts",
+        "HTTP 401: unauthorized",
+        "status code 401",
+        "Bad credentials",
+    ],
+)
+def test_explicit_credential_failures_map_to_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 1, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fail)
+
+    with pytest.raises(GhAuthenticationError):
+        GhCliBackend(Path(".")).get_pr(999)
 
 
 @pytest.mark.unit

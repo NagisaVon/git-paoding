@@ -6,6 +6,7 @@ receive only typed Pydantic result objects and never depend on CLI internals.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -37,6 +38,10 @@ from git_paoding.store.lock import SessionLock
 
 class BranchResolutionError(PaodingError):
     """Raised when no canonical branch can be selected safely."""
+
+
+class InvalidBaseRefError(PaodingError):
+    """Raised when local initialization is given a non-branch base ref."""
 
 
 class SliceAlreadyExistsError(PaodingError):
@@ -74,16 +79,52 @@ def _canonical_branch(repo: Path, requested: str | None) -> str:
     return branch
 
 
+def _validated_base_branch(repo: Path, base: str) -> None:
+    """Require a local or remote-tracking branch for local initialization."""
+
+    try:
+        symbolic_name = (
+            run_git(
+                (
+                    "rev-parse",
+                    "--symbolic-full-name",
+                    "--verify",
+                    "--end-of-options",
+                    base,
+                ),
+                cwd=repo,
+            )
+            .stdout_text()
+            .strip()
+        )
+    except GitCommandError as error:
+        raise InvalidBaseRefError(
+            "The base must be a branch or remote-tracking branch; use `init --pr` "
+            "when an integration PR exists."
+        ) from error
+    if not symbolic_name.startswith(("refs/heads/", "refs/remotes/")):
+        raise InvalidBaseRefError(
+            "The base must be a branch or remote-tracking branch; use `init --pr` "
+            "when an integration PR exists."
+        )
+
+
 def init_session(
     repo: Path,
     base: str,
     *,
-    backend: GitHubBackend,
+    backend: GitHubBackend | None = None,
     canonical_branch: str | None = None,
     slice_pr_prefix: str = "slice",
 ) -> StatusResult:
     """Pin ``base`` and initialize a session for the canonical branch."""
 
+    if backend is not None:
+        warnings.warn(
+            "The backend argument to init_session() is deprecated and ignored",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     repository = repo.resolve()
     branch = _canonical_branch(repository, canonical_branch)
     store = JsonSessionStore(repository)
@@ -92,7 +133,7 @@ def init_session(
             raise SessionAlreadyExistsError(
                 f"A git-paoding session already exists for branch {branch!r}"
             )
-        backend.check_ready()
+        _validated_base_branch(repository, base)
         base_oid = rev_parse(repository, f"{base}^{{commit}}")
         # Verify the canonical branch ref independently of the current checkout.
         rev_parse(repository, f"refs/heads/{branch}^{{commit}}")
@@ -376,6 +417,7 @@ __all__ = [
     "get_full_status",
     "get_status",
     "init_session",
+    "InvalidBaseRefError",
     "publish",
     "remove_slice",
     "rename_slice",

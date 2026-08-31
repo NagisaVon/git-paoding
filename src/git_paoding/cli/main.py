@@ -110,7 +110,6 @@ def init_command(base: str, slice_prefix: str) -> None:
         result = _facade.init_session(
             repo,
             base,
-            backend=_backend(repo),
             slice_pr_prefix=slice_prefix,
         )
     except (PaodingError, GitError, ValueError, OSError) as error:
