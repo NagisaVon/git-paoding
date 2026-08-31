@@ -12,6 +12,7 @@ from git_paoding.core.model import (
     AssignResult,
     PublishResult,
     PullRequestTarget,
+    ReplaceResult,
     StatusResult,
 )
 from git_paoding.core.progress import ProgressCallback
@@ -36,6 +37,15 @@ class CliFacade(Protocol):
         *,
         slice_pr_prefix: str = "slice",
     ) -> StatusResult: ...
+
+    def replace_session(
+        self,
+        repo: Path,
+        *,
+        base: str | None = None,
+        pr_target: PullRequestTarget | None = None,
+        slice_pr_prefix: str = "slice",
+    ) -> ReplaceResult: ...
 
     def add_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult: ...
 
@@ -101,6 +111,21 @@ class ApiFacade:
         return api.init_session_from_pr(
             repo,
             target,
+            slice_pr_prefix=slice_pr_prefix,
+        )
+
+    def replace_session(
+        self,
+        repo: Path,
+        *,
+        base: str | None = None,
+        pr_target: PullRequestTarget | None = None,
+        slice_pr_prefix: str = "slice",
+    ) -> ReplaceResult:
+        return api.replace_session(
+            repo,
+            base=base,
+            pr_target=pr_target,
             slice_pr_prefix=slice_pr_prefix,
         )
 
