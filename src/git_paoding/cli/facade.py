@@ -13,6 +13,7 @@ from git_paoding.core.model import (
     PublishResult,
     StatusResult,
 )
+from git_paoding.core.progress import ProgressCallback
 from git_paoding.github.backend import GitHubBackend
 
 
@@ -56,6 +57,8 @@ class CliFacade(Protocol):
         *,
         backend: GitHubBackend,
         remote: str,
+        progress: ProgressCallback | None = None,
+        network_timeout: float | None = 120.0,
     ) -> PublishResult: ...
 
     def archive(
@@ -118,8 +121,16 @@ class ApiFacade:
         *,
         backend: GitHubBackend,
         remote: str,
+        progress: ProgressCallback | None = None,
+        network_timeout: float | None = 120.0,
     ) -> PublishResult:
-        return api.publish(repo, backend=backend, remote=remote)
+        return api.publish(
+            repo,
+            backend=backend,
+            remote=remote,
+            progress=progress,
+            network_timeout=network_timeout,
+        )
 
     def archive(
         self,

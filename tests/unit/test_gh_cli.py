@@ -17,9 +17,11 @@ from git_paoding.github.gh_cli import (
     GhNotFoundError,
     GhRateLimitError,
     GhResponseError,
+    GhTimeoutError,
     GhUnavailableError,
     GhVersionError,
 )
+from git_paoding.gitio.trace import OpCategory, collecting
 
 GOLDEN = Path(__file__).parents[1] / "golden" / "github"
 
@@ -350,3 +352,33 @@ def test_command_failures_have_typed_taxonomy(
 
     with pytest.raises(error_type):
         GhCliBackend(Path(".")).get_pr(999)
+
+
+@pytest.mark.unit
+def test_timeout_maps_to_redacted_operation_and_records_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = "private PR body"
+    credentialed_url = "https://token@example.test/project"
+    env_value = "environment-secret"
+    monkeypatch.setenv("GH_TOKEN", env_value)
+
+    def timeout(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+
+    with collecting() as trace:
+        with pytest.raises(GhTimeoutError) as raised:
+            GhCliBackend(Path("."), timeout=0.25).update_pr(
+                41,
+                title=credentialed_url,
+                body=body,
+            )
+
+    message = str(raised.value)
+    assert message == "gh pr edit timed out after 0.25 seconds"
+    assert body not in message
+    assert credentialed_url not in message
+    assert env_value not in message
+    assert trace.counts == {OpCategory.GH_WRITE: 1}

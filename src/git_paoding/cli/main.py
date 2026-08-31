@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from time import perf_counter
 from typing import NoReturn
 
 import click
@@ -21,12 +22,14 @@ from git_paoding.cli.render import (
     render_status,
 )
 from git_paoding.core.model import AssignBatchRequest, PaodingError
+from git_paoding.core.progress import ProgressEvent, PublishPhase
 from git_paoding.github.gh_cli import GhCliBackend
 from git_paoding.gitio.runner import GitError
+from git_paoding.gitio.trace import OpCategory, SubprocessTrace, collecting
 
 
-def _backend(repo: Path) -> GhCliBackend:
-    return GhCliBackend(repo)
+def _backend(repo: Path, *, timeout: float | None = 120.0) -> GhCliBackend:
+    return GhCliBackend(repo, timeout=timeout)
 
 
 _facade: CliFacade = ApiFacade()
@@ -250,17 +253,70 @@ def focus_command(slice_id: str | None, clear_focus: bool) -> None:
 @main.command("publish")
 @click.option("--json", "as_json", is_flag=True, help="Emit the versioned JSON contract.")
 @click.option("--remote", default="origin", show_default=True, help="Git remote for projections.")
-def publish_command(as_json: bool, remote: str) -> None:
+@click.option("--quiet", is_flag=True, help="Suppress progress while keeping the final result.")
+@click.option("--trace", is_flag=True, help="Report aggregate phase and subprocess timings.")
+@click.option(
+    "--network-timeout",
+    type=click.FloatRange(min=0.0),
+    default=120.0,
+    show_default=True,
+    metavar="SECONDS",
+    help="Limit each network process; 0 disables the timeout.",
+)
+def publish_command(
+    as_json: bool,
+    remote: str,
+    quiet: bool,
+    trace: bool,
+    network_timeout: float,
+) -> None:
     """Publish or refresh Draft review projections idempotently."""
 
     repo = Path.cwd()
+    timeout = None if network_timeout == 0 else network_timeout
+    callback = None if quiet else _echo_progress
+    started = perf_counter()
+    subprocess_trace: SubprocessTrace | None = None
     try:
-        result = _facade.publish(repo, backend=_backend(repo), remote=remote)
+        with collecting() as subprocess_trace:
+            result = _facade.publish(
+                repo,
+                backend=_backend(repo, timeout=timeout),
+                remote=remote,
+                progress=callback,
+                network_timeout=timeout,
+            )
     except (PaodingError, GitError, ValueError, OSError) as error:
+        if trace and subprocess_trace is not None:
+            _echo_trace(subprocess_trace)
         _raise_cli_error(error)
     click.echo(result.model_dump_json(indent=2) if as_json else render_publish(result))
+    if not quiet:
+        click.echo(f"Publish complete in {perf_counter() - started:.1f}s", err=True)
+    if trace and subprocess_trace is not None:
+        _echo_trace(subprocess_trace)
     if result.action_needed:
         raise click.exceptions.Exit(2)
+
+
+def _echo_progress(event: ProgressEvent) -> None:
+    """Write safe publish progress separately from the result stream."""
+
+    click.echo(event.message, err=True)
+
+
+def _echo_trace(trace: SubprocessTrace) -> None:
+    """Render aggregate timings without command arguments or process output."""
+
+    click.echo("Trace:", err=True)
+    for phase in PublishPhase:
+        seconds = trace.phase_durations.get(phase.value)
+        if seconds is not None:
+            click.echo(f"  {phase.value}: {seconds:.3f}s", err=True)
+    for category in OpCategory:
+        count = trace.counts[category]
+        seconds = trace.durations.get(category, 0.0)
+        click.echo(f"  {category.value}: {count} processes, {seconds:.3f}s", err=True)
 
 
 @main.command("archive")

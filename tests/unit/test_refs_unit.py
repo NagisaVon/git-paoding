@@ -43,8 +43,10 @@ def test_sync_compares_both_refs_in_one_batch_and_pushes_only_mismatch(
         unused_repo: Path,
         remote: str,
         *patterns: str,
+        timeout: float | None = None,
     ) -> tuple[RemoteRef, ...]:
         assert unused_repo == repo
+        assert timeout is None
         ls_remote_calls.append((remote, patterns))
         return (RemoteRef(oid=base_oid, ref=refs.base),)
 
@@ -52,7 +54,7 @@ def test_sync_compares_both_refs_in_one_batch_and_pushes_only_mismatch(
     monkeypatch.setattr(
         refs_module,
         "_force_push",
-        lambda unused_repo, unused_remote, ref: pushed.append(ref),
+        lambda unused_repo, unused_remote, ref, timeout=None: pushed.append(ref),
     )
 
     result = sync_projection_refs(
@@ -82,7 +84,7 @@ def test_sync_pushes_base_before_head_when_both_mismatch(
     monkeypatch.setattr(
         refs_module,
         "_force_push",
-        lambda unused_repo, unused_remote, ref: pushed.append(ref),
+        lambda unused_repo, unused_remote, ref, timeout=None: pushed.append(ref),
     )
 
     result = sync_projection_refs(
@@ -99,6 +101,47 @@ def test_sync_pushes_base_before_head_when_both_mismatch(
 
 
 @pytest.mark.unit
+def test_sync_forwards_timeout_to_remote_operations(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = Path("/unused/repository")
+    refs = generated_refs("feature-demo-12345678", "storage")
+    calls: list[tuple[str, float | None]] = []
+
+    monkeypatch.setattr(refs_module, "update_local_projection_refs", lambda *args, **kwargs: None)
+
+    def fake_ls_remote(
+        unused_repo: Path,
+        remote: str,
+        *patterns: str,
+        timeout: float | None = None,
+    ) -> tuple[RemoteRef, ...]:
+        calls.append(("ls-remote", timeout))
+        return ()
+
+    def fake_push(
+        unused_repo: Path,
+        remote: str,
+        ref: str,
+        *,
+        timeout: float | None = None,
+    ) -> None:
+        calls.append(("push", timeout))
+
+    monkeypatch.setattr(refs_module, "ls_remote", fake_ls_remote)
+    monkeypatch.setattr(refs_module, "_force_push", fake_push)
+
+    sync_projection_refs(
+        repo,
+        "origin",
+        refs,
+        base_oid="1" * 40,
+        head_oid="2" * 40,
+        timeout=17.5,
+    )
+
+    assert calls == [("ls-remote", 17.5), ("push", 17.5), ("push", 17.5)]
+
+
+@pytest.mark.unit
 def test_delete_uses_one_remote_read_and_removes_head_before_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,8 +155,10 @@ def test_delete_uses_one_remote_read_and_removes_head_before_base(
         unused_repo: Path,
         remote: str,
         *patterns: str,
+        timeout: float | None = None,
     ) -> tuple[RemoteRef, ...]:
         assert unused_repo == repo
+        assert timeout is None
         ls_remote_calls.append((remote, patterns))
         return (
             RemoteRef(oid="1" * 40, ref=refs.base),
@@ -124,7 +169,7 @@ def test_delete_uses_one_remote_read_and_removes_head_before_base(
     monkeypatch.setattr(
         refs_module,
         "_delete_remote_ref",
-        lambda unused_repo, unused_remote, ref: remote_deletes.append(ref),
+        lambda unused_repo, unused_remote, ref, timeout=None: remote_deletes.append(ref),
     )
     monkeypatch.setattr(
         refs_module,
