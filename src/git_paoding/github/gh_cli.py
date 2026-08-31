@@ -10,7 +10,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Final, Sequence
 
-from git_paoding.core.model import PRRecord, PRState
+from git_paoding.core.model import PRRecord, PRState, PullRequestTarget
 from git_paoding.core.progress import report_network_process
 from git_paoding.github.backend import GitHubBackendError, PullRequestNotFoundError
 from git_paoding.gitio.trace import OpCategory, record
@@ -18,6 +18,10 @@ from git_paoding.gitio.trace import OpCategory, record
 MINIMUM_GH_VERSION: Final = (2, 45, 0)
 _OPEN_PR_LIST_LIMIT: Final = 1000
 _PR_JSON_FIELDS: Final = "number,url,title,body,state,isDraft,baseRefName,headRefName"
+_PR_TARGET_JSON_FIELDS: Final = (
+    "number,url,state,isCrossRepository,baseRefName,baseRefOid,headRefName,headRefOid,"
+    "changedFiles,additions,deletions"
+)
 _VERSION_PATTERN: Final = re.compile(r"\bgh version (\d+)\.(\d+)\.(\d+)\b")
 
 
@@ -265,6 +269,32 @@ class GhCliBackend:
         """Read one PR through ``gh pr view --json``."""
 
         return self._view_pr(str(number))
+
+    def resolve_pr_target(self, selector: str) -> PullRequestTarget:
+        """Resolve the metadata needed to initialize safely from an existing PR."""
+
+        output = self._run(("pr", "view", selector, "--json", _PR_TARGET_JSON_FIELDS))
+        payload = self._load_json(output, context="gh pr view")
+        if not isinstance(payload, dict) or not all(isinstance(key, str) for key in payload):
+            raise GhResponseError("`gh pr view --json` returned a non-object payload")
+        state_text = _required_str(payload, "state")
+        try:
+            state = PRState(state_text.casefold())
+        except ValueError as error:
+            raise GhResponseError(f"Unknown GitHub PR state: {state_text!r}") from error
+        return PullRequestTarget(
+            number=_required_int(payload, "number"),
+            url=_required_str(payload, "url"),
+            state=state,
+            is_cross_repository=_required_bool(payload, "isCrossRepository"),
+            base_ref_name=_required_str(payload, "baseRefName"),
+            base_ref_oid=_required_str(payload, "baseRefOid"),
+            head_ref_name=_required_str(payload, "headRefName"),
+            head_ref_oid=_required_str(payload, "headRefOid"),
+            changed_files=_required_int(payload, "changedFiles"),
+            additions=_required_int(payload, "additions"),
+            deletions=_required_int(payload, "deletions"),
+        )
 
     def _view_pr(self, selector: str) -> PRRecord:
         output = self._run(("pr", "view", selector, "--json", _PR_JSON_FIELDS))
