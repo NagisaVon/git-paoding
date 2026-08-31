@@ -29,3 +29,26 @@ To install, give this repository URL to your coding agent and ask it to install
 
 To slice, ask your coding agent to use `git-paoding` to turn the complete
 committed change on your current branch into semantic review slices.
+
+When the canonical branch already has an open integration pull request, initialize from it. This
+is the recommended path because git-paoding validates the real PR base, local merge base, head,
+and diffstat before pinning the session:
+
+```bash
+git-paoding init --pr <integration-pr-number-or-url>
+git-paoding slice add <slice-id> --title "<review concern>"
+git-paoding status --paths --action-needed-only
+git-paoding assign <slice-id> <path-or-atom-selector>
+git-paoding publish
+```
+
+If no integration PR exists yet, pin an explicit branch that is available locally:
+
+```bash
+git-paoding init --base <integration-target-branch>
+```
+
+The angle-bracket values are placeholders, not defaults. `publish` creates or refreshes Draft
+slice PRs and may create the authoritative integration PR; inspect its exit status before
+retrying (`0` clean, `2` attribution needed, `1` operational error). See the packaged agent skill
+for the compact status/batch workflow, recovery, progress, tracing, and timeout controls.

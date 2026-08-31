@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -112,3 +113,17 @@ def test_plugin_manifests_and_marketplaces_match_package_version() -> None:
         "./src/git_paoding/_agent_plugins/git-paoding"
     )
     assert (plugin / "skills" / "git-paoding" / "SKILL.md").is_file()
+
+
+@pytest.mark.unit
+def test_project_and_lock_versions_match_package_version() -> None:
+    root = Path(__file__).resolve().parents[2]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    locked_project = next(
+        package
+        for package in lock["package"]
+        if package["name"] == "git-paoding" and package["source"] == {"editable": "."}
+    )
+
+    assert project["project"]["version"] == locked_project["version"] == __version__
