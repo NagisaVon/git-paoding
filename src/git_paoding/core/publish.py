@@ -184,6 +184,18 @@ def _find_integration_pr(
     session: Session,
     open_prs: list[PRRecord],
 ) -> PRRecord | None:
+    stored: PRRecord | None = None
+    if session.integration_pr is not None:
+        try:
+            stored = backend.get_pr(session.integration_pr)
+        except PullRequestNotFoundError:
+            stored = None
+        if stored is not None and stored.state is PRState.MERGED:
+            raise PublishError(
+                f"Integration pull request #{stored.number} is already merged; "
+                "run `git-paoding archive` instead of publishing again"
+            )
+
     matches = [pr for pr in open_prs if pr.head_ref == session.canonical_branch]
     if len(matches) > 1:
         numbers = ", ".join(f"#{pr.number}" for pr in matches)
@@ -193,13 +205,7 @@ def _find_integration_pr(
     if matches:
         return matches[0]
 
-    if session.integration_pr is None:
-        return None
-    try:
-        stored = backend.get_pr(session.integration_pr)
-    except PullRequestNotFoundError:
-        return None
-    if stored.state is not PRState.OPEN:
+    if stored is None or stored.state is not PRState.OPEN:
         return None
     if stored.head_ref != session.canonical_branch:
         raise PublishError(
@@ -209,17 +215,12 @@ def _find_integration_pr(
     return stored
 
 
-def _ensure_integration_pr(
+def _create_integration_pr(
     backend: GitHubBackend,
     session: Session,
     *,
     remote: str,
-    open_prs: list[PRRecord],
 ) -> PRRecord:
-    existing = _find_integration_pr(backend, session, open_prs)
-    if existing is not None:
-        return existing
-
     initial_body = rewrite_integration_body("", slices=[])
     return backend.create_draft_pr(
         title=_integration_title(session),
@@ -343,6 +344,8 @@ def publish_session(
             return PublishResult(action_needed=True, status=status)
 
         backend.check_ready()
+        open_prs = backend.list_open_prs()
+        existing_integration_pr = _find_integration_pr(backend, session, open_prs)
         current_replay_atoms = _owned_replay_atoms(replay_atoms, session)
 
         # Prepare every non-empty active projection before mutating any pull
@@ -377,7 +380,6 @@ def publish_session(
                 ),
             )
 
-        open_prs = backend.list_open_prs()
         resolved_prs: dict[str, PRRecord] = {}
         for slice_ in session.slices:
             existing = _find_slice_pr(
@@ -389,11 +391,8 @@ def publish_session(
             if existing is not None:
                 resolved_prs[slice_.id] = existing
 
-        integration_pr = _ensure_integration_pr(
-            backend,
-            session,
-            remote=remote,
-            open_prs=open_prs,
+        integration_pr = existing_integration_pr or _create_integration_pr(
+            backend, session, remote=remote
         )
         if integration_pr not in open_prs:
             open_prs.append(integration_pr)

@@ -609,6 +609,35 @@ def test_archive_rejects_an_unmerged_integration_without_side_effects(
     assert JsonSessionStore(scratch.path).load("main").archived is False
 
 
+def test_publish_rejects_a_merged_integration_and_preserves_archive_identity(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    published = publish(scratch.path, backend=fake_backend)
+    integration_number = published.integration_pr
+    assert integration_number is not None
+    fake_backend.prs[integration_number] = fake_backend.prs[integration_number].model_copy(
+        update={"state": PRState.MERGED}
+    )
+    creates_before = list(fake_backend.creates)
+    stored_before = JsonSessionStore(scratch.path).load("main")
+
+    with pytest.raises(PublishError, match="already merged.*archive"):
+        publish(scratch.path, backend=fake_backend)
+
+    stored_after = JsonSessionStore(scratch.path).load("main")
+    assert fake_backend.creates == creates_before
+    assert stored_after.integration_pr == integration_number
+    assert stored_after.integration_pr == stored_before.integration_pr
+
+    archived = archive(scratch.path, backend=fake_backend)
+    assert archived.session.integration_pr == integration_number
+    assert archived.session.archived is True
+
+
 def test_archive_rejects_a_merged_slice_before_cleanup(
     scratch_repo_factory: ScratchRepoFactory,
     tmp_path: Path,
