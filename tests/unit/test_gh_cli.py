@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,62 @@ def test_get_pr_parses_recorded_gh_json(monkeypatch: pytest.MonkeyPatch) -> None
             "number,url,title,body,state,isDraft,baseRefName,headRefName",
         )
     ]
+
+
+@pytest.mark.unit
+def test_resolve_pr_target_parses_one_structured_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = GhCliBackend(Path("."))
+    sample = json.dumps(
+        {
+            "number": 73,
+            "url": "https://github.com/example/project/pull/73",
+            "state": "OPEN",
+            "isCrossRepository": False,
+            "baseRefName": "main",
+            "baseRefOid": "1" * 40,
+            "headRefName": "feature",
+            "headRefOid": "2" * 40,
+            "changedFiles": 4,
+            "additions": 30,
+            "deletions": 9,
+        }
+    )
+    seen: list[tuple[str, ...]] = []
+
+    def fake_run(args: tuple[str, ...]) -> str:
+        seen.append(args)
+        return sample
+
+    monkeypatch.setattr(backend, "_run", fake_run)
+
+    target = backend.resolve_pr_target("https://github.com/example/project/pull/73")
+
+    assert target.number == 73
+    assert target.state is PRState.OPEN
+    assert target.head_ref_name == "feature"
+    assert (target.changed_files, target.additions, target.deletions) == (4, 30, 9)
+    assert seen == [
+        (
+            "pr",
+            "view",
+            "https://github.com/example/project/pull/73",
+            "--json",
+            "number,url,state,isCrossRepository,baseRefName,baseRefOid,headRefName,"
+            "headRefOid,changedFiles,additions,deletions",
+        )
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("payload", ["[]", '{"number": 73}'])
+def test_resolve_pr_target_rejects_invalid_shapes(
+    monkeypatch: pytest.MonkeyPatch, payload: str
+) -> None:
+    backend = GhCliBackend(Path("."))
+    monkeypatch.setattr(backend, "_run", lambda args: payload)
+
+    with pytest.raises(GhResponseError, match="non-object|invalid or missing"):
+        backend.resolve_pr_target("73")
 
 
 @pytest.mark.unit

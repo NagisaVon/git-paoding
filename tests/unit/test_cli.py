@@ -20,7 +20,9 @@ from git_paoding.core.model import (
     AtomKind,
     AtomState,
     PaodingError,
+    PRState,
     PublishResult,
+    PullRequestTarget,
     SessionSummary,
     SliceStatus,
     SliceSummary,
@@ -178,6 +180,85 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
     assert "Action needed: 1 unassigned, 0 ambiguous" in add_result.output
     assert "Atoms:" not in add_result.output
     assert "a1 app.py" not in add_result.output
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("arguments", [["init"], ["init", "--base", "main", "--pr", "73"]])
+def test_init_requires_exactly_one_source_before_backend_access(
+    monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    monkeypatch.setattr(
+        cli_main,
+        "_backend",
+        lambda repo: (_ for _ in ()).throw(AssertionError("backend must not be constructed")),
+    )
+
+    result = CliRunner().invoke(cli_main.main, arguments)
+
+    assert result.exit_code == 2
+    assert "Exactly one of --base or --pr is required" in result.output
+
+
+@pytest.mark.unit
+def test_init_pr_checks_backend_and_resolves_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    status = _status().model_copy(
+        update={
+            "session": _status().session.model_copy(update={"integration_pr": 73}),
+        }
+    )
+    target = PullRequestTarget(
+        number=73,
+        url="https://github.com/example/project/pull/73",
+        state=PRState.OPEN,
+        is_cross_repository=False,
+        base_ref_name="main",
+        base_ref_oid="1" * 40,
+        head_ref_name="feature",
+        head_ref_oid="2" * 40,
+        changed_files=1,
+        additions=2,
+        deletions=3,
+    )
+    calls: list[object] = []
+
+    class Resolver:
+        def check_ready(self) -> None:
+            calls.append("ready")
+
+        def resolve_pr_target(self, selector: str) -> PullRequestTarget:
+            calls.append(("resolve", selector))
+            return target
+
+    def fake_init(
+        repo: Path,
+        resolved: PullRequestTarget,
+        *,
+        slice_pr_prefix: str,
+    ) -> StatusResult:
+        calls.append(("init", repo, resolved, slice_pr_prefix))
+        return status
+
+    monkeypatch.setattr(cli_main, "_backend", lambda repo: Resolver())
+    monkeypatch.setattr(
+        cli_main,
+        "_facade",
+        SimpleNamespace(init_session_from_pr=fake_init),
+    )
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["init", "--pr", "73", "--slice-prefix", "review"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        "ready",
+        ("resolve", "73"),
+        ("init", Path.cwd(), target, "review"),
+    ]
+    assert "Source PR: #73" in result.output
+    assert "Next: `git-paoding status --summary`" in result.output
+    assert "Action-needed atoms:" not in result.output
 
 
 @pytest.mark.unit
