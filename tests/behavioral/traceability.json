@@ -1,0 +1,14 @@
+{
+  "1": "test_property_01_single_primary_owner",
+  "2": "test_property_02_multiple_slices_per_file",
+  "3": "test_property_03_idempotent_refresh",
+  "4": "test_property_04_selective_refresh_preserves_review_surfaces",
+  "5": "test_property_05_stable_pr_mapping_recovers_from_marker",
+  "6": "test_property_06_metadata_loss_reinitializes_and_readopts_markers",
+  "7": "test_property_07_canonical_branch_isolation",
+  "8": "test_property_08_archive_retains_lifecycle_records",
+  "9": "test_property_09_remove_then_add_creates_a_new_identity",
+  "10": "test_property_10_no_slice_buildability_is_an_explicit_review_omission",
+  "11": "test_property_11_final_integration_tree_is_authoritative",
+  "12": "test_property_12_description_safety_preserves_human_bytes"
+}

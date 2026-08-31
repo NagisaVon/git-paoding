@@ -26,7 +26,10 @@ CANONICAL_BRANCH = "feature/live-publish-validation"
 SLICE_A = "review"
 SLICE_B = "context"
 EMPTY_SLICE = "empty-check"
-COMMENT_BODY = "git-paoding live publish validation: unchanged Slice A region"
+COMMENT_BODY = (
+    "This line belongs to the primary review slice and should remain anchored after an "
+    "unrelated same-file slice is published."
+)
 
 BASE_CONTENT = """# git-paoding live publish scenario
 alpha = "base"

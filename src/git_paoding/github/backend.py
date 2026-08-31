@@ -19,6 +19,10 @@ class DuplicatePullRequestMarkerError(GitHubBackendError):
     """Raised when one stable slice marker identifies multiple open PRs."""
 
 
+class PullRequestNotFoundError(GitHubBackendError):
+    """Raised when a requested pull-request identity no longer exists."""
+
+
 @runtime_checkable
 class GitHubBackend(Protocol):
     """Thin interface consumed by publish and archive orchestration."""

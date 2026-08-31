@@ -1,0 +1,12 @@
+{
+  "property": 10,
+  "enforcement": "deliberate review omission",
+  "prohibited_requirement": "No test may compile or run a synthetic slice projection.",
+  "permitted_observations": [
+    "Git object identity",
+    "merge-base shape",
+    "visible diff",
+    "generated ref publication",
+    "pull-request rendering"
+  ]
+}

@@ -9,6 +9,7 @@ import pytest
 from conftest import ScratchRepoFactory
 from git_paoding.gitio.plumbing import ls_remote, update_ref
 from git_paoding.gitio.refs import (
+    delete_projection_refs,
     generated_refs,
     sync_projection_refs,
     update_local_projection_refs,
@@ -99,3 +100,34 @@ def test_partial_prior_push_is_repaired_without_cached_session_oids(
         refs.base: repo.base_oid,
         refs.head: repo.final_oid,
     }
+
+
+@pytest.mark.integration
+def test_projection_ref_deletion_is_idempotent_for_remote_and_local_refs(
+    tmp_path: Path,
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory({"a.txt": "base\n"}, {"a.txt": "final\n"})
+    remote = tmp_path / "archive.git"
+    remote.mkdir()
+    run_git(("init", "--quiet", "--bare"), cwd=remote)
+    refs = generated_refs("feature-demo-12345678", "slice-archive")
+    sync_projection_refs(
+        repo.path,
+        str(remote),
+        refs,
+        base_oid=repo.base_oid,
+        head_oid=repo.final_oid,
+    )
+
+    first = delete_projection_refs(repo.path, str(remote), refs)
+    second = delete_projection_refs(repo.path, str(remote), refs)
+
+    assert first.base_deleted and first.head_deleted
+    assert second.is_no_op
+    assert _advertised(repo.path, remote, refs.base, refs.head) == {}
+    local_refs = run_git(
+        ("for-each-ref", "--format=%(refname)", refs.base, refs.head),
+        cwd=repo.path,
+    ).stdout_text()
+    assert local_refs == ""

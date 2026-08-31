@@ -1,8 +1,8 @@
 # Live publish workflow validation
 
-This manual workflow proves the vertical slice against real Git and real GitHub. It is not a
-CI test: it creates external resources and requires an authenticated `gh` account with
-permission to create private repositories.
+This manual workflow validates the end-to-end `init` → `slice add` → `assign` → `publish` path
+against real Git and real GitHub. It is not a CI test: it creates external resources and
+requires an authenticated `gh` account with permission to create private repositories.
 
 Run it from the `git-paoding` checkout:
 

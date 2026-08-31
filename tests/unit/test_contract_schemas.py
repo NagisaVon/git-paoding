@@ -17,6 +17,7 @@ from git_paoding.core.model import (
     PublishOutcome,
     PublishResult,
     PublishSliceResult,
+    Session,
     SessionSummary,
     SliceStatus,
     SliceSummary,
@@ -122,3 +123,27 @@ def test_contract_payload_matches_v0_golden(filename: str, payload: BaseModel) -
 
     assert golden == payload.model_dump_json(indent=2) + "\n"
     assert type(payload).model_validate_json(golden) == payload
+
+
+@pytest.mark.unit
+def test_additive_session_report_fields_accept_legacy_payloads() -> None:
+    legacy_status = json.loads((PAYLOAD_DIR / "status.v0.json").read_text(encoding="utf-8"))
+    legacy_status["session"].pop("archived")
+    legacy_status["session"].pop("slice_pr_prefix")
+    legacy_status.pop("defaulted_atom_ids")
+
+    parsed_status = StatusResult.model_validate(legacy_status)
+    parsed_session = Session.model_validate(
+        {
+            "schema_version": 1,
+            "canonical_branch": "feature/legacy",
+            "base_oid": "1" * 40,
+        }
+    )
+
+    assert parsed_status.contract_version == 0
+    assert parsed_status.session.archived is False
+    assert parsed_status.session.slice_pr_prefix == "slice"
+    assert parsed_status.defaulted_atom_ids == []
+    assert parsed_session.archived is False
+    assert parsed_session.slice_pr_prefix == "slice"

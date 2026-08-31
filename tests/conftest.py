@@ -11,7 +11,7 @@ from typing import Protocol, TypeAlias
 import pytest
 
 from git_paoding.core.model import PRRecord, PRState
-from git_paoding.github.backend import GitHubBackendError
+from git_paoding.github.backend import PullRequestNotFoundError
 from git_paoding.gitio.plumbing import GitIdentity, commit_tree, update_ref
 from git_paoding.gitio.runner import run_git
 
@@ -81,7 +81,7 @@ class FakeBackend:
         try:
             return self.prs[number]
         except KeyError as error:
-            raise GitHubBackendError(f"Pull request #{number} does not exist") from error
+            raise PullRequestNotFoundError(f"Pull request #{number} does not exist") from error
 
     def list_open_prs(self) -> list[PRRecord]:
         self.lists += 1

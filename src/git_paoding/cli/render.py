@@ -2,10 +2,77 @@
 
 from __future__ import annotations
 
-from git_paoding.core.model import AssignResult, PublishResult, SliceStatus, StatusResult
+from collections.abc import Sequence
+
+from git_paoding.core.model import (
+    AssignResult,
+    Atom,
+    AtomState,
+    PublishResult,
+    SliceStatus,
+    SliceSummary,
+    StatusResult,
+)
+
+_DEFAULT_PREVIEW_LINES = 3
 
 
-def render_status(result: StatusResult) -> str:
+def _slice_lines(slices: Sequence[SliceSummary]) -> list[str]:
+    lines = ["  ID  STATUS  DIFFSTAT  PR  TITLE"]
+    if not slices:
+        lines.append("  (none)")
+        return lines
+    for slice_ in slices:
+        diffstat = slice_.diffstat
+        pr = f"#{slice_.pr_number}" if slice_.pr_number else "-"
+        lines.append(
+            f"  {slice_.id}  {slice_.status.value}  "
+            f"{diffstat.files_changed} files +{diffstat.additions} -{diffstat.deletions}  "
+            f"{pr}  {slice_.title}"
+        )
+    return lines
+
+
+def _preview_lines(preview: str, *, full: bool, indent: str) -> list[str]:
+    if not preview:
+        return []
+    source = preview.splitlines()
+    visible = source if full else source[:_DEFAULT_PREVIEW_LINES]
+    lines = [f"{indent}{line}" for line in visible]
+    if not full and len(source) > _DEFAULT_PREVIEW_LINES and visible[-1] != "…":
+        lines.append(f"{indent}…")
+    return lines
+
+
+def _atom_lines(atoms: Sequence[Atom], *, full: bool) -> list[str]:
+    if not atoms:
+        return ["  (none)"]
+    lines: list[str] = []
+    for atom in atoms:
+        owner = atom.owner or "-"
+        lines.append(
+            f"  {atom.atom_id}  {atom.state.value}  owner={owner}  {atom.path}  "
+            f"base:{atom.base_start}+{atom.base_len}  "
+            f"final:{atom.final_start}+{atom.final_len}"
+        )
+        lines.extend(_preview_lines(atom.preview, full=full, indent="    "))
+    return lines
+
+
+def _mutation_summary(result: StatusResult) -> list[str]:
+    active_count = sum(slice_.status is SliceStatus.ACTIVE for slice_ in result.slices)
+    return [
+        f"Session: {result.session.canonical_branch}",
+        f"Slices: {active_count} active",
+        (
+            f"Action needed: {result.unassigned_count} unassigned, "
+            f"{result.ambiguous_count} ambiguous"
+        ),
+        "Run `git-paoding status` to inspect atoms.",
+    ]
+
+
+def render_status(result: StatusResult, *, full: bool = False) -> str:
     """Render session, slice, and atom attribution status."""
 
     lines = [
@@ -16,48 +83,83 @@ def render_status(result: StatusResult) -> str:
             f"Action needed: {result.unassigned_count} unassigned, "
             f"{result.ambiguous_count} ambiguous"
         ),
+        f"Focus: {result.session.focus_slice or '-'}",
+        (
+            "Defaulted by focus: " + ", ".join(result.defaulted_atom_ids)
+            if result.defaulted_atom_ids
+            else "Defaulted by focus: (none)"
+        ),
         "Slices:",
     ]
-    if not result.slices:
-        lines.append("  (none)")
-    for slice_ in result.slices:
-        lines.append(
-            f"  {slice_.id}: {slice_.title} "
-            f"({slice_.diffstat.files_changed} files, +{slice_.diffstat.additions} "
-            f"-{slice_.diffstat.deletions}, PR "
-            f"{f'#{slice_.pr_number}' if slice_.pr_number else '-'})"
-        )
-    lines.append("Atoms:")
-    if not result.atoms:
-        lines.append("  (none)")
-    for atom in result.atoms:
-        owner = atom.owner or "-"
-        lines.append(
-            f"  {atom.atom_id} {atom.path} "
-            f"base:{atom.base_start}+{atom.base_len} "
-            f"final:{atom.final_start}+{atom.final_len} "
-            f"{atom.state.value} owner={owner}"
-        )
-        if atom.preview:
-            lines.extend(f"    {line}" for line in atom.preview.splitlines())
+    lines.extend(_slice_lines(result.slices))
+    action_needed = [
+        atom for atom in result.atoms if atom.state in {AtomState.UNASSIGNED, AtomState.AMBIGUOUS}
+    ]
+    settled = [
+        atom
+        for atom in result.atoms
+        if atom.state not in {AtomState.UNASSIGNED, AtomState.AMBIGUOUS}
+    ]
+    lines.append("Action-needed atoms:")
+    lines.extend(_atom_lines(action_needed, full=full))
+    lines.append("Assigned/updated atoms:")
+    lines.extend(_atom_lines(settled, full=full))
     return "\n".join(lines)
+
+
+def render_slice_list(result: StatusResult) -> str:
+    """Render only slice identities and diffstats for the read-only list verb."""
+
+    return "\n".join(
+        [f"Session: {result.session.canonical_branch}", "Slices:", *_slice_lines(result.slices)]
+    )
 
 
 def render_slice_added(result: StatusResult, *, slice_id: str, title: str) -> str:
     """Render a concise acknowledgement for the slice-add mutation."""
 
-    active_count = sum(slice_.status is SliceStatus.ACTIVE for slice_ in result.slices)
     return "\n".join(
         [
             f"Added slice: {slice_id}",
             f"Title: {title}",
-            f"Session: {result.session.canonical_branch}",
-            f"Slices: {active_count} active",
-            (
-                f"Action needed: {result.unassigned_count} unassigned, "
-                f"{result.ambiguous_count} ambiguous"
-            ),
-            "Run `git-paoding status` to inspect atoms.",
+            *_mutation_summary(result),
+        ]
+    )
+
+
+def render_slice_removed(result: StatusResult, *, slice_id: str) -> str:
+    """Render the delta from removing one slice."""
+
+    return "\n".join(
+        [
+            f"Removed slice: {slice_id}",
+            "Its atoms are now unassigned and must be reassigned before publishing.",
+            *_mutation_summary(result),
+        ]
+    )
+
+
+def render_slice_renamed(result: StatusResult, *, slice_id: str, title: str) -> str:
+    """Render the delta from renaming one slice."""
+
+    return "\n".join([f"Renamed slice: {slice_id}", f"Title: {title}", *_mutation_summary(result)])
+
+
+def render_focus(result: StatusResult, *, slice_id: str | None) -> str:
+    """Render the session-global focus delta."""
+
+    focus_line = f"Focus: {slice_id}" if slice_id is not None else "Focus: cleared"
+    return "\n".join([focus_line, *_mutation_summary(result)])
+
+
+def render_archive(result: StatusResult) -> str:
+    """Render a concise archive completion summary."""
+
+    archived_count = sum(slice_.status is SliceStatus.ARCHIVED for slice_ in result.slices)
+    return "\n".join(
+        [
+            f"Archived session: {result.session.canonical_branch}",
+            f"Slices archived: {archived_count}",
         ]
     )
 
@@ -92,7 +194,12 @@ def render_publish(result: PublishResult) -> str:
             else "Integration PR: -"
         )
     ]
+    lines.append("Slices:")
+    if not result.slices:
+        lines.append("  (none)")
     for slice_ in result.slices:
         suffix = f" PR #{slice_.pr_number} {slice_.url}" if slice_.pr_number else ""
-        lines.append(f"{slice_.slice_id}: {slice_.outcome.value}{suffix}")
+        lines.append(f"  {slice_.slice_id}  {slice_.outcome.value}{suffix}")
+    if result.status is not None and result.status.defaulted_atom_ids:
+        lines.append("Defaulted by focus: " + ", ".join(result.status.defaulted_atom_ids))
     return "\n".join(lines)
