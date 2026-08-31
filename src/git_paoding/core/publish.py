@@ -1,8 +1,8 @@
 """Idempotent publish orchestration.
 
 Ref pushes and pull-request mutations happen only in this module; every other
-core module stays local.  Archive and the wider reconcile/selector semantics
-are deliberately deferred past the CP2 vertical slice.
+core module stays local. Archive support and broader reconciliation and
+selector semantics are outside this initial end-to-end publication workflow.
 """
 
 from __future__ import annotations

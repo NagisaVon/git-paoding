@@ -127,8 +127,8 @@ def atomize_hunks(hunks: Sequence[RawDiffHunk]) -> tuple[ReplayAtom, ...]:
     """Convert raw hunks to atoms plus non-persistent text replay payloads.
 
     Pure insertions sharing a Base gap receive monotonically increasing
-    ``gap_seq`` values in their Final/diff order. Atom IDs use A7's first-eight
-    hash form and receive deterministic ``-N`` suffixes on collisions.
+    ``gap_seq`` values in their Final/diff order. Atom IDs use the first eight
+    hash characters and receive deterministic ``-N`` suffixes on collisions.
     """
 
     gap_counts: dict[tuple[str, int], int] = defaultdict(int)

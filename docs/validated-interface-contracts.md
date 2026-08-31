@@ -1,8 +1,8 @@
-# CP2 contract freeze
+# Validated interface contracts
 
-The following interfaces are frozen at the end of the CP2 automated/live validation. Phase 3
-workstreams program against them; post-CP2 changes require coordinated ownership as defined in
-the implementation plan.
+The following interfaces were frozen after the automated and live end-to-end publication
+validation. Subsequent workstreams program against them; changes require coordinated review
+because these are public and persistent contracts.
 
 - Public facade signatures in `git_paoding.api`: `init_session`, `add_slice`, `get_status`,
   `assign`, and `publish`.

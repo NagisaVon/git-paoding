@@ -33,7 +33,7 @@ def render_slice_machine_content(
     integration_pr_url: str,
     currently_empty: bool = False,
 ) -> str:
-    """Render the minimal T06-managed slice metadata."""
+    """Render the minimal machine-managed slice metadata."""
 
     parts = [DO_NOT_MERGE_BANNER, f"Integration PR: {integration_pr_url}"]
     if currently_empty:

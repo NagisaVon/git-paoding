@@ -33,7 +33,7 @@ class RefSyncResult:
 
 
 def generated_refs(branch_key: str, slice_id: str) -> GeneratedRefs:
-    """Return A12's generated ref names for a branch key and slice id."""
+    """Return the generated base and head ref names for a review slice."""
 
     if not branch_key or "/" in branch_key:
         raise ValueError("branch_key must be a non-empty single ref component")

@@ -1,16 +1,17 @@
-# CP2 live evidence — 2026-08-29
+# Live publish workflow evidence — 2026-08-29
 
-The repeatable workflow in `scripts/live_cp2.py` completed all five stages against real Git and
-GitHub. The private scratch repository is intentionally retained for author audit.
+The repeatable workflow in `scripts/live_publish_validation.py` completed all five stages
+against real Git and GitHub. The private scratch repository is intentionally retained for
+author audit.
 
 ## Resources and identity
 
 - GitHub account: `NagisaVon`
 - `gh`: `2.97.0` (2026-07-31)
-- Scratch repo: <https://github.com/NagisaVon/git-paoding-cp2-live-20260829-212725>
-- Integration Draft PR: <https://github.com/NagisaVon/git-paoding-cp2-live-20260829-212725/pull/1>
-- Slice A Draft PR: <https://github.com/NagisaVon/git-paoding-cp2-live-20260829-212725/pull/2>
-- Slice B Draft PR: <https://github.com/NagisaVon/git-paoding-cp2-live-20260829-212725/pull/3>
+- Scratch repo: retained private validation repository owned by `NagisaVon`
+- Integration Draft PR: `#1`
+- Slice A Draft PR: `#2`
+- Slice B Draft PR: `#3`
 - Base OID: `b61a95815a821bd323c68a94d6416ef251050ee6`
 - Final canonical OID/tree: `c36c771a28e59f7b59312294e78f1129084fe133` /
   `f036fdf14463a623727879d2211c77ff2565a56d`
@@ -31,10 +32,8 @@ project branch was pushed. The scratch repo is private and has not been cleaned 
   `<!-- paoding-integration-pr -->` and linked Slice A.
 - Empty slice `empty-check` returned `empty`, with no PR number or URL.
 - Initial generated refs/OIDs:
-  - `paoding/feature-cp2-live-10a3413d/review/base` →
-    `e585698744d6d4b722451b091835be243a2a979c`
-  - `paoding/feature-cp2-live-10a3413d/review/head` →
-    `12c5200ea0bb0a5ea246e9b378d7844453d62174`
+  - Slice A base ref → `e585698744d6d4b722451b091835be243a2a979c`
+  - Slice A head ref → `12c5200ea0bb0a5ea246e9b378d7844453d62174`
 - `merge-base(base, head)` was exactly the synthetic base OID.
 - Local Git diff equality and the GitHub files API both proved that `scenario.txt` showed
   exactly the owned Slice A hunk; GitHub patch SHA-256:
@@ -72,9 +71,7 @@ project branch was pushed. The scratch repo is private and has not been cleaned 
 
 ### 5. Unchanged inline comment under an unrelated full-Final refresh
 
-- An inline review comment was placed on Slice A's unchanged line 2:
-  <https://github.com/NagisaVon/git-paoding-cp2-live-20260829-212725/pull/2#discussion_r3887725910>
-  (comment ID `3887725910`).
+- An inline review comment (ID `3887725910`) was placed on Slice A's unchanged line 2.
 - A new Slice B hunk changed line 11 of the same `scenario.txt`; status surfaced it unassigned,
   the real CLI assigned it to `context`, and publish created Slice B PR `#3`.
 - Slice A remained PR `#2`. Its full-Final refs changed again:
@@ -94,11 +91,11 @@ project branch was pushed. The scratch repo is private and has not been cleaned 
 Every successful publish also compared canonical branch, HEAD, tree, worktree status before and
 after. All five isolation snapshots were identical and the canonical worktree ended clean.
 
-## PRODUCT_DESIGN §7 invariant walk
+## Validated product invariants
 
 | # | Invariant | Live observation |
 |---|---|---|
-| 1 | Canonical state | Only `feature/cp2-live` was authoritative; all isolation snapshots passed. |
+| 1 | Canonical state | Only the live-validation feature branch was authoritative; all isolation snapshots passed. |
 | 2 | No stack maintenance | Generated refs were never checked out or manually edited. |
 | 3 | Final state | Every generated head represented the current canonical Final. |
 | 4 | Diff level | Slice A and B owned separate hunks in the same `scenario.txt`. |
@@ -111,16 +108,16 @@ after. All five isolation snapshots were identical and the canonical worktree en
 | 11 | Selective update | B rewrote A's refs but not A's visible patch, comment anchor, or PR identity. |
 | 12 | GitHub-native history | GitHub retained and re-anchored the real inline review comment. |
 
-## A3 / A4 / A5 and CP2 freeze
+## Validated behavior and frozen interfaces
 
-- A3 confirmed: a new empty slice was reported and skipped without PR creation. The
+- Empty-slice handling was confirmed: a new empty slice was reported and skipped without PR creation. The
   existing-PR-becomes-empty half remains green in the real-Git/fake-backend integration test.
-- A4 confirmed live: successful publish auto-created exactly one Draft integration PR and
-  maintained its slice index.
-- A5 confirmed live: operational error `1`, action-needed `2`, clean success `0`.
-- No observed behavior requires a change to `IMPLEMENTATION_PLAN.md` §6 or a product-design
-  deviation report.
+- Integration-PR creation was confirmed live: successful publish auto-created exactly one Draft
+  integration PR and maintained its slice index.
+- Exit statuses were confirmed live: operational error `1`, action-needed `2`, clean success `0`.
+- No observed behavior contradicted the documented product behavior or required a deviation.
 - Facade signatures, model types, Session store schema v1, `GitHubBackend` Protocol, and the
   status/assign-batch/publish JSON contract v0 schemas and payload goldens are frozen.
-- Automated and live validation passed, and the author reviewed this evidence, approved
-  A3/A4/A5, and signed off CP2 on 2026-08-29.
+- Automated and live validation passed, and the author reviewed the empty-slice,
+  integration-PR, and exit-status evidence and signed off the validated interface contracts on
+  2026-08-29.

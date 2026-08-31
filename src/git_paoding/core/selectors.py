@@ -1,7 +1,7 @@
 """Minimal atom-id and exact-path assignment selectors.
 
-Glob, directory, range, batch, and force semantics are deliberately deferred
-until after the CP2 facade freeze.
+Glob, directory, range, batch, and force semantics are deliberately outside
+this initial atom-id and exact-path selector surface.
 """
 
 from __future__ import annotations

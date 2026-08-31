@@ -1,4 +1,4 @@
-"""Tests for T07's atom-id and exact-path selector surface."""
+"""Tests for the atom-id and exact-path selector surface."""
 
 from __future__ import annotations
 

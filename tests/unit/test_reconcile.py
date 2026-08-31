@@ -1,4 +1,4 @@
-"""Tests for T05's deliberately minimal exact-range reconciliation."""
+"""Tests for deliberately minimal exact-range reconciliation."""
 
 from __future__ import annotations
 

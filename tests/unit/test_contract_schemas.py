@@ -47,7 +47,7 @@ def test_contract_schema_matches_exported_golden(filename: str, model: type[Base
 def _status_payload() -> StatusResult:
     return StatusResult(
         session=SessionSummary(
-            canonical_branch="feature/cp2",
+            canonical_branch="feature/review-slices",
             base_ref="origin/main",
             base_oid="1" * 40,
             last_final_oid="2" * 40,
@@ -95,7 +95,7 @@ def _publish_payload() -> PublishResult:
                 title="Review behavior",
                 outcome=PublishOutcome.NO_OP,
                 pr_number=42,
-                url="https://github.com/example/git-paoding-cp2/pull/42",
+                url="https://github.com/example/git-paoding/pull/42",
             ),
             PublishSliceResult(
                 slice_id="empty-check",
@@ -104,7 +104,7 @@ def _publish_payload() -> PublishResult:
             ),
         ],
         integration_pr=41,
-        integration_pr_url="https://github.com/example/git-paoding-cp2/pull/41",
+        integration_pr_url="https://github.com/example/git-paoding/pull/41",
     )
 
 
