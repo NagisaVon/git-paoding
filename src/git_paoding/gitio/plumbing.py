@@ -118,6 +118,20 @@ def ls_tree(repo: Path, treeish: str) -> tuple[TreeEntry, ...]:
     """List the direct entries of a tree without consulting the index."""
 
     output = run_git(("ls-tree", "-z", treeish), cwd=repo).stdout
+    return _parse_ls_tree(output)
+
+
+def ls_tree_recursive(repo: Path, treeish: str) -> tuple[TreeEntry, ...]:
+    """List every entry with its full path, including intermediate trees."""
+
+    output = run_git(
+        ("ls-tree", "-r", "-t", "-z", "--full-tree", treeish),
+        cwd=repo,
+    ).stdout
+    return _parse_ls_tree(output)
+
+
+def _parse_ls_tree(output: bytes) -> tuple[TreeEntry, ...]:
     entries: list[TreeEntry] = []
     for raw_entry in output.split(b"\0"):
         if not raw_entry:
