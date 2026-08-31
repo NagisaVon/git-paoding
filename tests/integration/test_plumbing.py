@@ -9,12 +9,14 @@ import pytest
 from conftest import ScratchRepoFactory
 from git_paoding.gitio.plumbing import (
     GitIdentity,
+    TreeEntry,
     cat_file,
     commit_tree,
     diff_numstat,
     hash_object,
     ls_remote,
     ls_tree,
+    ls_tree_recursive,
     merge_base,
     mktree,
     object_exists,
@@ -46,6 +48,68 @@ def test_mktree_from_ls_tree_reproduces_tree_oid(
     entries = ls_tree(repo.path, repo.final_tree_oid)
 
     assert mktree(repo.path, entries) == repo.final_tree_oid
+
+
+@pytest.mark.integration
+def test_ls_tree_recursive_returns_full_paths_and_tree_rows(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    unusual_path = "nested/deeper/non-utf-8-\udcff.txt"
+    repo = scratch_repo_factory({"anchor.txt": "base\n"}, {"anchor.txt": "final\n"})
+    nested_blob_oid = hash_object(repo.path, b"nested\n")
+    root_blob_oid = hash_object(repo.path, b"root\n")
+    deeper_tree_oid = mktree(
+        repo.path,
+        (
+            TreeEntry(
+                mode="100644",
+                object_type="blob",
+                oid=nested_blob_oid,
+                path=unusual_path.rsplit("/", maxsplit=1)[-1],
+            ),
+        ),
+    )
+    nested_tree_oid = mktree(
+        repo.path,
+        (
+            TreeEntry(
+                mode="040000",
+                object_type="tree",
+                oid=deeper_tree_oid,
+                path="deeper",
+            ),
+        ),
+    )
+    root_tree_oid = mktree(
+        repo.path,
+        (
+            TreeEntry(
+                mode="040000",
+                object_type="tree",
+                oid=nested_tree_oid,
+                path="nested",
+            ),
+            TreeEntry(
+                mode="100644",
+                object_type="blob",
+                oid=root_blob_oid,
+                path="root.txt",
+            ),
+        ),
+    )
+
+    entries = ls_tree_recursive(repo.path, root_tree_oid)
+
+    assert {entry.path for entry in entries} == {
+        "nested",
+        "nested/deeper",
+        unusual_path,
+        "root.txt",
+    }
+    assert {entry.path for entry in entries if entry.object_type == "tree"} == {
+        "nested",
+        "nested/deeper",
+    }
 
 
 @pytest.mark.integration

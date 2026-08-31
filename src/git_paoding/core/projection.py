@@ -20,7 +20,7 @@ from git_paoding.gitio.plumbing import (
     commit_committer_date,
     commit_tree,
     hash_object,
-    ls_tree,
+    ls_tree_recursive,
     mktree,
     rev_parse,
 )
@@ -51,9 +51,36 @@ class ProjectionCommits:
     head_commit_oid: str
 
 
+@dataclass(frozen=True, slots=True)
+class _FrozenTree:
+    """An immutable snapshot node retaining its existing Git tree object."""
+
+    oid: str
+    entries: dict[str, _FrozenTree | TreeEntry]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionContext:
+    """Repository snapshot and replay indexes shared by projection builds."""
+
+    repo: Path
+    base_oid: str
+    final_oid: str
+    base_tree_oid: str
+    final_tree_oid: str
+    final_committer_date: str
+    final_root: _FrozenTree
+    base_entries: dict[str, TreeEntry]
+    atoms_by_path: dict[str, tuple[ReplayAtom, ...]]
+    _blob_cache: dict[str, bytes]
+
+
 @dataclass(slots=True)
-class _TreeNode:
-    entries: dict[str, _TreeNode | TreeEntry] = field(default_factory=dict)
+class _CowTree:
+    """Sparse changes layered over one frozen tree node."""
+
+    frozen: _FrozenTree | None
+    changes: dict[str, _CowTree | TreeEntry | None] = field(default_factory=dict)
 
 
 def _base_index(replay_atom: ReplayAtom) -> int:
@@ -148,16 +175,6 @@ def replay_file(
     return b"".join(lines)
 
 
-def _load_tree(repo: Path, tree_oid: str) -> _TreeNode:
-    node = _TreeNode()
-    for entry in ls_tree(repo, tree_oid):
-        if entry.object_type == "tree":
-            node.entries[entry.path] = _load_tree(repo, entry.oid)
-        else:
-            node.entries[entry.path] = entry
-    return node
-
-
 def _path_parts(path: str) -> tuple[str, ...]:
     parts = tuple(path.split("/"))
     if not parts or any(not part for part in parts):
@@ -165,7 +182,69 @@ def _path_parts(path: str) -> tuple[str, ...]:
     return parts
 
 
-def _lookup_entry(root: _TreeNode, path: str) -> TreeEntry | None:
+def _fold_tree(tree_oid: str, entries: Sequence[TreeEntry]) -> _FrozenTree:
+    direct_entries: dict[str, dict[str, _FrozenTree | TreeEntry]] = {}
+    tree_entries: dict[str, TreeEntry] = {}
+    for entry in entries:
+        parent, separator, name = entry.path.rpartition("/")
+        if not separator:
+            parent = ""
+            name = entry.path
+        normalized = TreeEntry(
+            mode=entry.mode,
+            object_type=entry.object_type,
+            oid=entry.oid,
+            path=name,
+        )
+        direct_entries.setdefault(parent, {})[name] = normalized
+        if entry.object_type == "tree":
+            tree_entries[entry.path] = entry
+
+    for path in sorted(tree_entries, key=lambda value: value.count("/"), reverse=True):
+        tree_entry = tree_entries[path]
+        node = _FrozenTree(oid=tree_entry.oid, entries=direct_entries.get(path, {}))
+        parent, separator, name = path.rpartition("/")
+        if not separator:
+            parent = ""
+            name = path
+        direct_entries.setdefault(parent, {})[name] = node
+    return _FrozenTree(oid=tree_oid, entries=direct_entries.get("", {}))
+
+
+def load_projection_context(
+    repo: Path,
+    *,
+    base_oid: str,
+    final_oid: str,
+    replay_atoms: Sequence[ReplayAtom],
+) -> ProjectionContext:
+    """Load one Base/Final snapshot for any number of slice projections."""
+
+    base_tree_oid = rev_parse(repo, f"{base_oid}^{{tree}}")
+    final_tree_oid = rev_parse(repo, f"{final_oid}^{{tree}}")
+    final_date = commit_committer_date(repo, final_oid)
+    base_tree_entries = ls_tree_recursive(repo, base_tree_oid)
+    final_tree_entries = ls_tree_recursive(repo, final_tree_oid)
+
+    atoms_by_path_lists: dict[str, list[ReplayAtom]] = {}
+    for replay_atom in replay_atoms:
+        atoms_by_path_lists.setdefault(replay_atom.atom.path, []).append(replay_atom)
+
+    return ProjectionContext(
+        repo=repo,
+        base_oid=base_oid,
+        final_oid=final_oid,
+        base_tree_oid=base_tree_oid,
+        final_tree_oid=final_tree_oid,
+        final_committer_date=final_date,
+        final_root=_fold_tree(final_tree_oid, final_tree_entries),
+        base_entries={entry.path: entry for entry in base_tree_entries},
+        atoms_by_path={path: tuple(items) for path, items in atoms_by_path_lists.items()},
+        _blob_cache={},
+    )
+
+
+def _lookup_frozen_entry(root: _FrozenTree, path: str) -> TreeEntry | None:
     node = root
     parts = _path_parts(path)
     for part in parts[:-1]:
@@ -178,84 +257,160 @@ def _lookup_entry(root: _TreeNode, path: str) -> TreeEntry | None:
             return None
         node = child
     value = node.entries.get(parts[-1])
-    if isinstance(value, _TreeNode):
+    if isinstance(value, _FrozenTree):
         return None
     return value
 
 
-def _delete_path(root: _TreeNode, path: str) -> None:
-    parts = _path_parts(path)
-
-    def remove(node: _TreeNode, index: int) -> bool:
-        part = parts[index]
-        if index == len(parts) - 1:
-            node.entries.pop(part, None)
-            return not node.entries
-        child = node.entries.get(part)
-        if child is None:
-            return not node.entries
-        if isinstance(child, TreeEntry):
-            # Removing a deeper path beneath a file is already satisfied.  A
-            # desired replacement will create the needed directory later.
-            return not node.entries
-        if remove(child, index + 1):
-            node.entries.pop(part, None)
-        return not node.entries
-
-    remove(root, 0)
+def _lookup_base_entry(context: ProjectionContext, path: str) -> TreeEntry | None:
+    value = context.base_entries.get(path)
+    if value is None or value.object_type == "tree":
+        return None
+    return value
 
 
-def _set_path(root: _TreeNode, path: str, entry: TreeEntry) -> None:
-    node = root
-    parts = _path_parts(path)
-    for part in parts[:-1]:
-        child = node.entries.get(part)
-        if child is None:
-            child = _TreeNode()
-            node.entries[part] = child
-        elif isinstance(child, TreeEntry):
-            raise ProjectionError(
-                f"cannot create {path!r}: its parent component {part!r} is a file"
-            )
-        node = child
-    existing = node.entries.get(parts[-1])
-    if isinstance(existing, _TreeNode):
-        raise ProjectionError(f"cannot replace tree {path!r} with a file in one projection")
-    node.entries[parts[-1]] = TreeEntry(
-        mode=entry.mode,
-        object_type=entry.object_type,
-        oid=entry.oid,
-        path=parts[-1],
+def _cow_get(node: _CowTree, name: str) -> _CowTree | _FrozenTree | TreeEntry | None:
+    if name in node.changes:
+        return node.changes[name]
+    if node.frozen is None:
+        return None
+    return node.frozen.entries.get(name)
+
+
+def _cow_items(node: _CowTree) -> list[tuple[str, _CowTree | _FrozenTree | TreeEntry]]:
+    items: list[tuple[str, _CowTree | _FrozenTree | TreeEntry]] = []
+    seen: set[str] = set()
+    if node.frozen is not None:
+        for name in node.frozen.entries:
+            seen.add(name)
+            value = _cow_get(node, name)
+            if value is not None:
+                items.append((name, value))
+    for name, value in node.changes.items():
+        if name not in seen and value is not None:
+            items.append((name, value))
+    return items
+
+
+def _cow_is_empty(node: _CowTree) -> bool:
+    return not _cow_items(node)
+
+
+def _delete_parts(node: _CowTree, parts: tuple[str, ...], index: int) -> bool:
+    name = parts[index]
+    current = _cow_get(node, name)
+    if current is None:
+        return False
+    if index == len(parts) - 1:
+        node.changes[name] = None
+        return True
+    if isinstance(current, TreeEntry):
+        return False
+
+    child = current if isinstance(current, _CowTree) else _CowTree(frozen=current)
+    changed = _delete_parts(child, parts, index + 1)
+    if changed:
+        node.changes[name] = None if _cow_is_empty(child) else child
+    return changed
+
+
+def _delete_path(root: _CowTree, path: str) -> None:
+    _delete_parts(root, _path_parts(path), 0)
+
+
+def _same_entry(left: TreeEntry, right: TreeEntry) -> bool:
+    return (
+        left.mode == right.mode and left.object_type == right.object_type and left.oid == right.oid
     )
 
 
-def _write_tree(repo: Path, node: _TreeNode) -> str:
-    entries: list[TreeEntry] = []
-    for name, value in node.entries.items():
-        if isinstance(value, _TreeNode):
-            entries.append(
-                TreeEntry(
-                    mode="040000",
-                    object_type="tree",
-                    oid=_write_tree(repo, value),
-                    path=name,
-                )
+def _set_parts(node: _CowTree, parts: tuple[str, ...], index: int, entry: TreeEntry) -> bool:
+    name = parts[index]
+    current = _cow_get(node, name)
+    if index == len(parts) - 1:
+        if isinstance(current, (_CowTree, _FrozenTree)):
+            raise ProjectionError(
+                f"cannot replace tree {'/'.join(parts)!r} with a file in one projection"
             )
+        normalized = TreeEntry(
+            mode=entry.mode,
+            object_type=entry.object_type,
+            oid=entry.oid,
+            path=name,
+        )
+        if isinstance(current, TreeEntry) and _same_entry(current, normalized):
+            return False
+        node.changes[name] = normalized
+        return True
+
+    if isinstance(current, TreeEntry):
+        raise ProjectionError(
+            f"cannot create {'/'.join(parts)!r}: its parent component {name!r} is a file"
+        )
+    child = (
+        current
+        if isinstance(current, _CowTree)
+        else _CowTree(frozen=current if isinstance(current, _FrozenTree) else None)
+    )
+    changed = _set_parts(child, parts, index + 1, entry)
+    if changed:
+        node.changes[name] = child
+    return changed
+
+
+def _set_path(root: _CowTree, path: str, entry: TreeEntry) -> None:
+    _set_parts(root, _path_parts(path), 0, entry)
+
+
+def _write_cow_tree(repo: Path, node: _CowTree) -> str:
+    if not node.changes and node.frozen is not None:
+        return node.frozen.oid
+
+    entries: list[TreeEntry] = []
+    unchanged = node.frozen is not None
+    frozen_names = set(node.frozen.entries) if node.frozen is not None else set()
+    current_names: set[str] = set()
+    for name, value in _cow_items(node):
+        current_names.add(name)
+        if isinstance(value, (_CowTree, _FrozenTree)):
+            oid = value.oid if isinstance(value, _FrozenTree) else _write_cow_tree(repo, value)
+            entry = TreeEntry(mode="040000", object_type="tree", oid=oid, path=name)
         else:
-            entries.append(value)
+            entry = TreeEntry(
+                mode=value.mode,
+                object_type=value.object_type,
+                oid=value.oid,
+                path=name,
+            )
+        entries.append(entry)
+        if unchanged and node.frozen is not None:
+            original = node.frozen.entries.get(name)
+            if isinstance(original, _FrozenTree):
+                unchanged = entry.object_type == "tree" and entry.oid == original.oid
+            elif isinstance(original, TreeEntry):
+                unchanged = _same_entry(entry, original)
+            else:
+                unchanged = False
+
+    if unchanged and current_names == frozen_names and node.frozen is not None:
+        return node.frozen.oid
     return mktree(repo, entries)
 
 
-def _entry_content(repo: Path, entry: TreeEntry | None, *, path: str) -> bytes | None:
+def _entry_content(
+    context: ProjectionContext, entry: TreeEntry | None, *, path: str
+) -> bytes | None:
     if entry is None:
         return None
     if entry.object_type != "blob":
         raise ProjectionError(f"text atom path {path!r} does not resolve to a blob")
-    return cat_file(repo, entry.oid)
+    if entry.oid not in context._blob_cache:
+        context._blob_cache[entry.oid] = cat_file(context.repo, entry.oid)
+    return context._blob_cache[entry.oid]
 
 
 def _synthetic_entry(
-    repo: Path,
+    context: ProjectionContext,
     *,
     path: str,
     slice_id: str,
@@ -272,22 +427,104 @@ def _synthetic_entry(
         return base_entry
 
     non_slice_atoms = tuple(item for item in path_atoms if item.atom.owner != slice_id)
-    content = replay_file(
-        _entry_content(repo, base_entry, path=path),
-        non_slice_atoms,
-    )
+    base_content = _entry_content(context, base_entry, path=path)
+    content = replay_file(base_content, non_slice_atoms)
     if content is None:
         return None
 
     mode_source = final_entry or base_entry
     if mode_source is None or mode_source.object_type != "blob":
         raise ProjectionError(f"could not determine blob mode for projected path {path!r}")
+    oid = (
+        base_entry.oid
+        if base_entry is not None and base_content is not None and content == base_content
+        else hash_object(context.repo, content)
+    )
     return TreeEntry(
         mode=mode_source.mode,
         object_type="blob",
-        oid=hash_object(repo, content),
+        oid=oid,
         path=_path_parts(path)[-1],
     )
+
+
+def _build_projection(
+    context: ProjectionContext, slice_id: str, owned_paths: set[str]
+) -> ProjectionCommits:
+    synthetic_root = _CowTree(frozen=context.final_root)
+    desired_entries: dict[str, TreeEntry | None] = {}
+    for path in owned_paths:
+        desired_entries[path] = _synthetic_entry(
+            context,
+            path=path,
+            slice_id=slice_id,
+            path_atoms=context.atoms_by_path[path],
+            base_entry=_lookup_base_entry(context, path),
+            final_entry=_lookup_frozen_entry(context.final_root, path),
+        )
+
+    for path in sorted(desired_entries, key=lambda value: value.count("/"), reverse=True):
+        _delete_path(synthetic_root, path)
+    for path in sorted(desired_entries, key=lambda value: value.count("/")):
+        entry = desired_entries[path]
+        if entry is not None:
+            _set_path(synthetic_root, path, entry)
+
+    synthetic_tree_oid = _write_cow_tree(context.repo, synthetic_root)
+    identity = GitIdentity(
+        name=_PROJECTION_IDENTITY.name,
+        email=_PROJECTION_IDENTITY.email,
+        date=context.final_committer_date,
+    )
+    base_message = f"git-paoding projection base\nslice: {slice_id}\nfinal: {context.final_oid}\n"
+    base_commit_oid = commit_tree(
+        context.repo,
+        synthetic_tree_oid,
+        base_message,
+        parents=(context.base_oid,),
+        author=identity,
+        committer=identity,
+    )
+    head_message = f"git-paoding projection head\nslice: {slice_id}\nfinal: {context.final_oid}\n"
+    head_commit_oid = commit_tree(
+        context.repo,
+        context.final_tree_oid,
+        head_message,
+        parents=(base_commit_oid,),
+        author=identity,
+        committer=identity,
+    )
+    return ProjectionCommits(
+        slice_id=slice_id,
+        final_oid=context.final_oid,
+        base_tree_oid=synthetic_tree_oid,
+        head_tree_oid=context.final_tree_oid,
+        base_commit_oid=base_commit_oid,
+        head_commit_oid=head_commit_oid,
+    )
+
+
+def build_projections(
+    context: ProjectionContext,
+    slice_ids: Sequence[str],
+) -> dict[str, ProjectionCommits]:
+    """Build multiple projections from one immutable repository snapshot."""
+
+    requested = set(slice_ids)
+    if "" in requested:
+        raise ProjectionError("slice id must not be empty")
+
+    paths_by_owner: dict[str, set[str]] = {slice_id: set() for slice_id in requested}
+    for path, path_atoms in context.atoms_by_path.items():
+        for replay_atom in path_atoms:
+            owner = replay_atom.atom.owner
+            if owner in paths_by_owner:
+                paths_by_owner[owner].add(path)
+
+    return {
+        slice_id: _build_projection(context, slice_id, paths_by_owner[slice_id])
+        for slice_id in slice_ids
+    }
 
 
 def build_projection(
@@ -298,79 +535,12 @@ def build_projection(
     slice_id: str,
     replay_atoms: Sequence[ReplayAtom],
 ) -> ProjectionCommits:
-    """Build deterministic full-Final-tree projection commits for one slice.
+    """Build one projection through the shared-context implementation."""
 
-    The synthetic base starts from the complete Final tree and replaces only
-    files containing ``slice_id`` atoms with Base plus all non-slice atoms.
-    The generated head always uses the untouched full Final tree.  All objects
-    are written through Git plumbing; HEAD, the index, and the worktree are not
-    consulted or modified.
-    """
-
-    if not slice_id:
-        raise ProjectionError("slice id must not be empty")
-
-    base_tree_oid = rev_parse(repo, f"{base_oid}^{{tree}}")
-    final_tree_oid = rev_parse(repo, f"{final_oid}^{{tree}}")
-    base_root = _load_tree(repo, base_tree_oid)
-    synthetic_root = _load_tree(repo, final_tree_oid)
-
-    atoms_by_path: dict[str, list[ReplayAtom]] = {}
-    for replay_atom in replay_atoms:
-        atoms_by_path.setdefault(replay_atom.atom.path, []).append(replay_atom)
-
-    desired_entries: dict[str, TreeEntry | None] = {}
-    for path, path_atoms in atoms_by_path.items():
-        if not any(item.atom.owner == slice_id for item in path_atoms):
-            continue
-        desired_entries[path] = _synthetic_entry(
-            repo,
-            path=path,
-            slice_id=slice_id,
-            path_atoms=path_atoms,
-            base_entry=_lookup_entry(base_root, path),
-            final_entry=_lookup_entry(synthetic_root, path),
-        )
-
-    # Clear every touched path before materializing replacements, so a path
-    # can swap between file and directory without colliding with its old entry.
-    for path in sorted(desired_entries, key=lambda value: value.count("/"), reverse=True):
-        _delete_path(synthetic_root, path)
-    for path in sorted(desired_entries, key=lambda value: value.count("/")):
-        entry = desired_entries[path]
-        if entry is not None:
-            _set_path(synthetic_root, path, entry)
-
-    synthetic_tree_oid = _write_tree(repo, synthetic_root)
-    final_date = commit_committer_date(repo, final_oid)
-    identity = GitIdentity(
-        name=_PROJECTION_IDENTITY.name,
-        email=_PROJECTION_IDENTITY.email,
-        date=final_date,
-    )
-    base_message = f"git-paoding projection base\nslice: {slice_id}\nfinal: {final_oid}\n"
-    base_commit_oid = commit_tree(
+    context = load_projection_context(
         repo,
-        synthetic_tree_oid,
-        base_message,
-        parents=(base_oid,),
-        author=identity,
-        committer=identity,
-    )
-    head_message = f"git-paoding projection head\nslice: {slice_id}\nfinal: {final_oid}\n"
-    head_commit_oid = commit_tree(
-        repo,
-        final_tree_oid,
-        head_message,
-        parents=(base_commit_oid,),
-        author=identity,
-        committer=identity,
-    )
-    return ProjectionCommits(
-        slice_id=slice_id,
+        base_oid=base_oid,
         final_oid=final_oid,
-        base_tree_oid=synthetic_tree_oid,
-        head_tree_oid=final_tree_oid,
-        base_commit_oid=base_commit_oid,
-        head_commit_oid=head_commit_oid,
+        replay_atoms=replay_atoms,
     )
+    return build_projections(context, (slice_id,))[slice_id]
