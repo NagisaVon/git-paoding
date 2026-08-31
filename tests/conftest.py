@@ -25,6 +25,7 @@ class FakeBackend:
     ready_checks: int = 0
     creates: list[int] = field(default_factory=list)
     updates: list[int] = field(default_factory=list)
+    update_requests: list[tuple[int, str, str]] = field(default_factory=list)
     closes: list[int] = field(default_factory=list)
     gets: list[int] = field(default_factory=list)
     lists: int = 0
@@ -64,6 +65,7 @@ class FakeBackend:
         updated = current.model_copy(update={"title": title, "body": body})
         self.prs[number] = updated
         self.updates.append(number)
+        self.update_requests.append((number, title, body))
         self.call_log.append(f"update:{number}")
         return updated
 

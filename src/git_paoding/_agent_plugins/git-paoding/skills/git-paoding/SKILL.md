@@ -78,8 +78,9 @@ git-paoding slice add tests --title "Storage behavior tests"
 ```
 
 Omit `--slice-prefix` to use `slice`. The prefix changes only slice PR titles;
-it does not change stable slice IDs or generated refs. The integration PR title
-is exactly the canonical branch name.
+it does not change stable slice IDs or generated refs. An integration PR that
+`git-paoding` creates uses the canonical branch name as its title. If publish
+adopts an existing integration PR, it preserves that PR's title exactly.
 
 The base is pinned to a commit at initialization. Choose the real integration
 target; do not silently change it later.

@@ -91,12 +91,18 @@ def _prepare_repository(
     return scratch, remote
 
 
-def _integration_pr(number: int, *, base_ref: str) -> PRRecord:
+def _integration_pr(
+    number: int,
+    *,
+    base_ref: str,
+    title: str = "main",
+    body: str = "",
+) -> PRRecord:
     return PRRecord(
         number=number,
         url=f"https://example.test/pulls/{number}",
-        title="main",
-        body="",
+        title=title,
+        body=body,
         state=PRState.OPEN,
         is_draft=True,
         base_ref=base_ref,
@@ -237,6 +243,67 @@ def test_publish_adopts_exact_head_and_base_integration_pr(
     assert JsonSessionStore(scratch.path).load("main").integration_pr == 40
     assert result.slices[0].pr_number == 41
     assert fake_backend.prs[41].url in fake_backend.prs[40].body
+
+
+def test_publish_preserves_adopted_integration_title_and_human_description(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    title = "Human integration title"
+    narrative = "Human overview\n\nSlides: https://example.test/review-slides"
+    fake_backend.seed(_integration_pr(40, base_ref="base", title=title, body=narrative))
+
+    first = publish(scratch.path, backend=fake_backend)
+
+    integration_pr = fake_backend.prs[40]
+    assert first.integration_pr == 40
+    assert integration_pr.title == title
+    assert integration_pr.body.startswith(f"{narrative}\n\n{MACHINE_REGION_START}")
+    assert integration_pr.body.endswith(MACHINE_REGION_END)
+    assert fake_backend.prs[41].url in integration_pr.body
+    assert fake_backend.update_requests[-1] == (40, title, integration_pr.body)
+
+    first_body = integration_pr.body
+    add_slice(scratch.path, "later", "Later review")
+    second = publish(scratch.path, backend=fake_backend)
+
+    refreshed = fake_backend.prs[40]
+    assert second.integration_pr == 40
+    assert refreshed.title == title
+    assert refreshed.body != first_body
+    assert refreshed.body.startswith(f"{narrative}\n\n{MACHINE_REGION_START}")
+    assert refreshed.body.endswith(MACHINE_REGION_END)
+    assert "`later` — Later review _(currently empty)_" in refreshed.body
+    assert fake_backend.update_requests[-1] == (40, title, refreshed.body)
+
+
+def test_integration_title_mismatch_alone_is_a_publish_no_op(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    first = publish(scratch.path, backend=fake_backend)
+    assert first.integration_pr is not None
+
+    integration_number = first.integration_pr
+    custom_title = "Human-retitled integration PR"
+    fake_backend.prs[integration_number] = fake_backend.prs[integration_number].model_copy(
+        update={"title": custom_title}
+    )
+    updates_before = list(fake_backend.updates)
+    requests_before = list(fake_backend.update_requests)
+
+    second = publish(scratch.path, backend=fake_backend)
+
+    assert [item.outcome for item in second.slices] == [PublishOutcome.NO_OP]
+    assert fake_backend.prs[integration_number].title == custom_title
+    assert fake_backend.updates == updates_before
+    assert fake_backend.update_requests == requests_before
 
 
 def test_publish_rejects_same_head_wrong_base_before_remote_writes(
