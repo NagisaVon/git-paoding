@@ -9,5 +9,6 @@ delimiters. Every refresh preserves those outside bytes exactly while updating
 only machine-owned metadata inside the delimiters.
 
 The managed slice region retains its safety banner, integration link,
-atoms-derived diffstat, related-slice links, stable identity marker, and any
-lifecycle notes. The managed integration region retains only the slice index.
+atoms-derived diffstat, related-slice links, and stable identity marker. A
+separate lifecycle region retains removal or archive notes.
+The managed integration region retains only the slice index.
