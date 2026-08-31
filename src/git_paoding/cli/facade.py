@@ -1,30 +1,19 @@
-"""Typed, replaceable seam between the Click shell and the public facade.
-
-Some command hooks are completed by the publish-integration owner. Keeping
-their expected signatures here lets command parsing and rendering remain
-independently testable without changing the frozen facade in this workstream.
-"""
+"""Typed, replaceable seam between the Click shell and the public API."""
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Callable, Protocol, cast
+from typing import Protocol
 
 from git_paoding import api
 from git_paoding.core.model import (
     AssignBatchRequest,
     AssignResult,
-    PaodingError,
     PublishResult,
     StatusResult,
 )
 from git_paoding.github.backend import GitHubBackend
-
-
-class FacadeUnavailableError(PaodingError):
-    """Raised when a command awaits its integration-owned facade hook."""
 
 
 class CliFacade(Protocol):
@@ -79,15 +68,6 @@ class CliFacade(Protocol):
     ) -> StatusResult: ...
 
 
-def _integration_hook(name: str) -> object:
-    function = getattr(api, name, None)
-    if function is None:
-        raise FacadeUnavailableError(
-            f"The {name} facade hook is not available until publish integration is installed"
-        )
-    return function
-
-
 class ApiFacade:
     """Default adapter over :mod:`git_paoding.api`."""
 
@@ -108,19 +88,14 @@ class ApiFacade:
         return api.get_status(repo)
 
     def remove_slice(self, repo: Path, slice_id: str) -> StatusResult:
-        function = cast("Callable[[Path, str], StatusResult]", _integration_hook("remove_slice"))
-        return function(repo, slice_id)
+        return api.remove_slice(repo, slice_id)
 
     def rename_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult:
-        function = cast(
-            "Callable[[Path, str, str], StatusResult]", _integration_hook("rename_slice")
-        )
-        return function(repo, slice_id, title)
+        return api.rename_slice(repo, slice_id, title)
 
     def get_status(self, repo: Path, *, full: bool) -> StatusResult:
         if full:
-            function = cast("Callable[[Path], StatusResult]", _integration_hook("get_full_status"))
-            return function(repo)
+            return api.get_full_status(repo)
         return api.get_status(repo)
 
     def assign(
@@ -131,29 +106,13 @@ class ApiFacade:
         *,
         force: bool,
     ) -> AssignResult:
-        function = api.assign
-        if force and "force" not in inspect.signature(function).parameters:
-            raise FacadeUnavailableError(
-                "The force-aware assign facade hook is not available until publish integration "
-                "is installed"
-            )
-        if force:
-            callable_with_force = cast("Callable[..., AssignResult]", function)
-            return callable_with_force(repo, slice_id, selectors, force=True)
-        return function(repo, slice_id, selectors)
+        return api.assign(repo, slice_id, selectors, force=force)
 
     def assign_batch(self, repo: Path, request: AssignBatchRequest) -> AssignResult:
-        function = cast(
-            "Callable[[Path, AssignBatchRequest], AssignResult]",
-            _integration_hook("assign_batch"),
-        )
-        return function(repo, request)
+        return api.assign_batch(repo, request)
 
     def set_focus(self, repo: Path, slice_id: str | None) -> StatusResult:
-        function = cast(
-            "Callable[[Path, str | None], StatusResult]", _integration_hook("set_focus")
-        )
-        return function(repo, slice_id)
+        return api.set_focus(repo, slice_id)
 
     def publish(
         self,
@@ -171,5 +130,4 @@ class ApiFacade:
         backend: GitHubBackend,
         remote: str,
     ) -> StatusResult:
-        function = cast("Callable[..., StatusResult]", _integration_hook("archive"))
-        return function(repo, backend=backend, remote=remote)
+        return api.archive(repo, backend=backend, remote=remote)

@@ -131,8 +131,14 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
             }
         )
 
-    def fake_assign(repo: Path, slice_id: str, selectors: Sequence[str]) -> AssignResult:
-        calls.append(("assign", repo, slice_id, tuple(selectors)))
+    def fake_assign(
+        repo: Path,
+        slice_id: str,
+        selectors: Sequence[str],
+        *,
+        force: bool,
+    ) -> AssignResult:
+        calls.append(("assign", repo, slice_id, tuple(selectors), force))
         return AssignResult(
             assigned=[
                 AssignmentRecord(
@@ -165,7 +171,7 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
         ("backend", Path.cwd()),
         ("init", Path.cwd(), "origin/main", backend, "ABC-123"),
         ("add", Path.cwd(), "storage", "Storage"),
-        ("assign", Path.cwd(), "storage", ("a1", "app.py")),
+        ("assign", Path.cwd(), "storage", ("a1", "app.py"), False),
     ]
     assert "assigned a1 app.py -> storage" in assign_result.output
     assert "-old" in assign_result.output
