@@ -1,14 +1,14 @@
-# CP2 live validation
+# Live publish workflow validation
 
-This manual workflow proves the vertical slice against real Git and real GitHub. It is not a
-CI test: it creates external resources and requires an authenticated `gh` account with
-permission to create private repositories.
+This manual workflow validates the end-to-end `init` → `slice add` → `assign` → `publish` path
+against real Git and real GitHub. It is not a CI test: it creates external resources and
+requires an authenticated `gh` account with permission to create private repositories.
 
 Run it from the `git-paoding` checkout:
 
 ```bash
-uv run python scripts/live_cp2.py \
-  --evidence /tmp/git-paoding-cp2-live-evidence.json
+uv run python scripts/live_publish_validation.py \
+  --evidence /tmp/git-paoding-live-publish-evidence.json
 ```
 
 The script always creates a new, clearly named private repository under the current `gh`
@@ -33,7 +33,8 @@ The five checked stages are:
    patch, and live inline-comment anchor.
 
 The JSON evidence contains the scratch repo/PR URLs, every important ref/OID, timeline and body
-fingerprints, marker recovery, comment identity/anchoring, the 12 invariant walk, A3/A4/A5
-findings, and the CP2 interface/contract freeze scope.
+fingerprints, marker recovery, comment identity/anchoring, the 12 invariant walk, validated
+empty-slice, integration-PR, and exit-status behavior, and the frozen interface contract scope.
 
-The accepted 2026-08-29 run is recorded in `docs/evidence/cp2-live-2026-08-29.md`.
+The accepted 2026-08-29 run is recorded in
+`docs/evidence/live-publish-validation-2026-08-29.md`.

@@ -6,7 +6,7 @@
       "title": "Review behavior",
       "outcome": "no-op",
       "pr_number": 42,
-      "url": "https://github.com/example/git-paoding-cp2/pull/42"
+      "url": "https://github.com/example/git-paoding/pull/42"
     },
     {
       "slice_id": "empty-check",
@@ -17,7 +17,7 @@
     }
   ],
   "integration_pr": 41,
-  "integration_pr_url": "https://github.com/example/git-paoding-cp2/pull/41",
+  "integration_pr_url": "https://github.com/example/git-paoding/pull/41",
   "action_needed": false,
   "status": null
 }

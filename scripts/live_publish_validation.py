@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the CP2 five-step validation against a newly-created GitHub scratch repo.
+"""Run the five-step publish validation against a newly created GitHub scratch repo.
 
 This is a manual, networked workflow. It is intentionally excluded from pytest/CI.
 The created private repository and its Draft PRs are preserved for human audit.
@@ -22,13 +22,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-CANONICAL_BRANCH = "feature/cp2-live"
+CANONICAL_BRANCH = "feature/live-publish-validation"
 SLICE_A = "review"
 SLICE_B = "context"
 EMPTY_SLICE = "empty-check"
-COMMENT_BODY = "git-paoding CP2 live validation: unchanged Slice A region"
+COMMENT_BODY = (
+    "This line belongs to the primary review slice and should remain anchored after an "
+    "unrelated same-file slice is published."
+)
 
-BASE_CONTENT = """# git-paoding CP2 live scenario
+BASE_CONTENT = """# git-paoding live publish scenario
 alpha = "base"
 stable_01 = true
 stable_02 = true
@@ -50,7 +53,7 @@ class CommandResult:
 
 
 class ValidationFailure(RuntimeError):
-    """Raised when a live observation violates the CP2 contract."""
+    """Raised when a live observation violates the publish workflow contract."""
 
 
 def fail(message: str) -> NoReturn:
@@ -111,13 +114,13 @@ class Scenario:
         self.owner = ""
         self.repo_slug = ""
         self.repo_url = ""
-        self.work_root = Path(tempfile.mkdtemp(prefix="git-paoding-cp2-live-"))
+        self.work_root = Path(tempfile.mkdtemp(prefix="git-paoding-live-publish-"))
         self.repo = self.work_root / "repo"
         self.command_env = os.environ.copy()
         self.command_env["UV_CACHE_DIR"] = str(self.work_root / "uv-cache")
         self.evidence: dict[str, Any] = {
             "evidence_version": 1,
-            "scenario": "T08 CP2 five-step live validation",
+            "scenario": "five-step live publish workflow validation",
             "started_at": utc_now(),
             "source_commit": self.git_source("rev-parse", "HEAD").stdout.strip(),
             "steps": {},
@@ -257,11 +260,11 @@ class Scenario:
         user = self.api("user")
         self.owner = user["login"]
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        name = self.repo_name or f"git-paoding-cp2-live-{timestamp}"
+        name = self.repo_name or f"git-paoding-live-publish-{timestamp}"
         self.repo_slug = f"{self.owner}/{name}"
         self.repo_url = f"https://github.com/{self.repo_slug}"
         self.git("init", "--quiet", "--initial-branch=main")
-        self.git("config", "user.name", "git-paoding CP2 live validation")
+        self.git("config", "user.name", "git-paoding live publish validation")
         self.git("config", "user.email", "git-paoding@localhost")
         self.gh(
             "repo",
@@ -273,7 +276,7 @@ class Scenario:
             "--remote",
             "origin",
             "--description",
-            "Disposable-but-preserved git-paoding CP2 live validation evidence",
+            "Disposable-but-preserved git-paoding live publish validation evidence",
         )
         self.evidence.update(
             {
@@ -290,13 +293,13 @@ class Scenario:
         scenario = self.repo / "scenario.txt"
         scenario.write_text(BASE_CONTENT, encoding="utf-8")
         self.git("add", "scenario.txt")
-        self.git("commit", "--quiet", "-m", "CP2 live base")
+        self.git("commit", "--quiet", "-m", "Live publish validation base")
         self.git("push", "--quiet", "--set-upstream", "origin", "main")
         base_oid = self.git("rev-parse", "HEAD").stdout.strip()
         self.git("switch", "--quiet", "-c", CANONICAL_BRANCH)
         scenario.write_text(BASE_CONTENT.replace('alpha = "base"', 'alpha = "slice-v1"'))
         self.git("add", "scenario.txt")
-        self.git("commit", "--quiet", "-m", "CP2 Slice A v1")
+        self.git("commit", "--quiet", "-m", "Live publish validation Slice A v1")
         self.git("push", "--quiet", "--set-upstream", "origin", CANONICAL_BRANCH)
         self.evidence["base_oid"] = base_oid
         self.evidence["canonical_branch"] = CANONICAL_BRANCH
@@ -599,7 +602,7 @@ class Scenario:
         )
         self.evidence["canonical_isolation_checks"] = self.isolation_checks
         self.evidence["invariants"] = {
-            "1_canonical_state": "one canonical feature/cp2-live branch; all publish isolation snapshots passed",
+            "1_canonical_state": "one canonical live-publish-validation branch; all publish isolation snapshots passed",
             "2_no_stack_maintenance": "generated refs were never checked out or edited",
             "3_final_state": "each generated head OID tracked the current canonical Final",
             "4_diff_level": "Slice A and Slice B own separate hunks in scenario.txt",
@@ -612,10 +615,10 @@ class Scenario:
             "11_selective_update": "Slice B rewrote Slice A refs but not its patch, comment anchor, or PR identity",
             "12_github_history": "GitHub retained the live inline review comment on the unchanged Slice A hunk",
         }
-        self.evidence["assumptions"] = {
-            "A3": "confirmed: a new empty slice was reported empty and no PR was created; existing-empty behavior also remains covered by the real-Git/fake-backend integration test",
-            "A4": "confirmed live: first successful publish auto-created one Draft integration PR and indexed slices",
-            "A5": "confirmed live: operational/no-session=1, action-needed=2, success=0",
+        self.evidence["validated_behaviors"] = {
+            "empty_slice_handling": "confirmed: a new empty slice was reported empty and no PR was created; existing-empty behavior also remains covered by the real-Git/fake-backend integration test",
+            "integration_pull_request": "confirmed live: first successful publish auto-created one Draft integration PR and indexed slices",
+            "exit_statuses": "confirmed live: operational/no-session=1, action-needed=2, success=0",
             "author_sign_off": "awaiting author sign-off",
         }
         self.evidence["contract_freeze"] = {

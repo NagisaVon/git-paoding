@@ -91,11 +91,11 @@ def render_slice_machine_content(
     related_slices: Sequence[RelatedSliceLink] = (),
     currently_empty: bool = False,
 ) -> str:
-    """Render the machine-owned metadata for a slice review PR.
+    """Render the machine-owned metadata for a slice review pull request.
 
-    ``diffstat`` and ``related_slices`` are optional only for compatibility
-    with the initial publisher. Completed callers provide both from the same
-    reconciled atom set used to construct the projection.
+    Callers may omit ``diffstat`` and ``related_slices`` to render only the
+    core metadata. Publication paths provide both from the same reconciled
+    atom set used to construct the projection.
     """
 
     integration_number = _pr_number_from_url(integration_pr_url)

@@ -48,7 +48,7 @@ class RefDeleteResult:
 
 
 def generated_refs(branch_key: str, slice_id: str) -> GeneratedRefs:
-    """Return generated ref names for a branch key and slice id."""
+    """Return generated base and head ref names for one branch and review slice."""
 
     if not branch_key or "/" in branch_key:
         raise ValueError("branch_key must be a non-empty single ref component")

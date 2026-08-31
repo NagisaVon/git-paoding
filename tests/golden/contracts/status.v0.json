@@ -1,7 +1,7 @@
 {
   "contract_version": 0,
   "session": {
-    "canonical_branch": "feature/cp2",
+    "canonical_branch": "feature/review-slices",
     "base_ref": "origin/main",
     "base_oid": "1111111111111111111111111111111111111111",
     "slice_pr_prefix": "slice",
