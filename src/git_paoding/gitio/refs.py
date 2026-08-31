@@ -32,8 +32,23 @@ class RefSyncResult:
         return not self.base_pushed and not self.head_pushed
 
 
+@dataclass(frozen=True, slots=True)
+class RefDeleteResult:
+    """Which generated refs existed remotely and were deleted."""
+
+    refs: GeneratedRefs
+    base_deleted: bool
+    head_deleted: bool
+
+    @property
+    def is_no_op(self) -> bool:
+        """Return whether the remote already lacked both generated refs."""
+
+        return not self.base_deleted and not self.head_deleted
+
+
 def generated_refs(branch_key: str, slice_id: str) -> GeneratedRefs:
-    """Return A12's generated ref names for a branch key and slice id."""
+    """Return generated ref names for a branch key and slice id."""
 
     if not branch_key or "/" in branch_key:
         raise ValueError("branch_key must be a non-empty single ref component")
@@ -58,6 +73,10 @@ def update_local_projection_refs(
 
 def _force_push(repo: Path, remote: str, ref: str) -> None:
     run_git(("push", "--force", remote, f"{ref}:{ref}"), cwd=repo)
+
+
+def _delete_remote_ref(repo: Path, remote: str, ref: str) -> None:
+    run_git(("push", remote, "--delete", ref), cwd=repo)
 
 
 def sync_projection_refs(
@@ -95,4 +114,32 @@ def sync_projection_refs(
         refs=refs,
         base_pushed=base_pushed,
         head_pushed=head_pushed,
+    )
+
+
+def delete_projection_refs(repo: Path, remote: str, refs: GeneratedRefs) -> RefDeleteResult:
+    """Delete one archived slice's generated refs locally and remotely.
+
+    Remote existence is read in one batch so retries skip refs that an earlier
+    attempt already removed. The head disappears before the base, reversing
+    publication order and avoiding an intermediate advertised head whose
+    generated base has already gone away. Local derived refs are removed only
+    after remote cleanup succeeds.
+    """
+
+    advertised = {item.ref: item.oid for item in ls_remote(repo, remote, refs.base, refs.head)}
+    base_deleted = refs.base in advertised
+    head_deleted = refs.head in advertised
+
+    if head_deleted:
+        _delete_remote_ref(repo, remote, refs.head)
+    if base_deleted:
+        _delete_remote_ref(repo, remote, refs.base)
+
+    update_ref(repo, refs.head, None)
+    update_ref(repo, refs.base, None)
+    return RefDeleteResult(
+        refs=refs,
+        base_deleted=base_deleted,
+        head_deleted=head_deleted,
     )

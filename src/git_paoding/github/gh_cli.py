@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final, Sequence
 
 from git_paoding.core.model import PRRecord, PRState
-from git_paoding.github.backend import GitHubBackendError
+from git_paoding.github.backend import GitHubBackendError, PullRequestNotFoundError
 
 MINIMUM_GH_VERSION: Final = (2, 45, 0)
 _OPEN_PR_LIST_LIMIT: Final = 1000
@@ -28,6 +28,18 @@ class GhUnavailableError(GhCliError):
 
 class GhAuthenticationError(GhCliError):
     """Raised when ``gh`` has no usable authenticated account."""
+
+
+class GhNetworkError(GhCliError):
+    """Raised when GitHub cannot be reached reliably."""
+
+
+class GhNotFoundError(GhCliError, PullRequestNotFoundError):
+    """Raised when a requested GitHub repository or pull request is absent."""
+
+
+class GhRateLimitError(GhCliError):
+    """Raised when GitHub refuses a call because a rate limit was reached."""
 
 
 class GhVersionError(GhCliError):
@@ -51,6 +63,83 @@ class GhResponseError(GhCliError):
 
 def _version_text(version: tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in version)
+
+
+def _mapped_command_error(
+    *,
+    args: tuple[str, ...],
+    returncode: int,
+    stderr: str,
+) -> GhCliError:
+    """Map stable ``gh``/HTTP diagnostics to actionable backend errors."""
+
+    normalized = stderr.casefold()
+    detail = stderr.strip() or "gh exited without an error message"
+    if any(
+        marker in normalized
+        for marker in (
+            "rate limit exceeded",
+            "secondary rate limit",
+            "http 429",
+            "status code 429",
+            "too many requests",
+        )
+    ):
+        return GhRateLimitError(
+            f"GitHub rate limit reached while running `gh {' '.join(args)}`: {detail}. "
+            "Wait for the limit to reset and try again."
+        )
+    if any(
+        marker in normalized
+        for marker in (
+            "could not resolve host",
+            "connection refused",
+            "connection reset",
+            "error connecting to",
+            "failed to connect",
+            "connection timed out",
+            "network is unreachable",
+            "network error",
+            "temporary failure in name resolution",
+            "tls handshake timeout",
+            "i/o timeout",
+            "dial tcp",
+        )
+    ):
+        return GhNetworkError(
+            f"Could not reach GitHub while running `gh {' '.join(args)}`: {detail}. "
+            "Check the network connection and try again."
+        )
+    if any(
+        marker in normalized
+        for marker in (
+            "not logged into",
+            "authentication required",
+            "authentication failed",
+            "authentication",
+            "http 401",
+            "bad credentials",
+            "oauth token",
+        )
+    ):
+        return GhAuthenticationError(
+            "GitHub CLI is not authenticated. Run `gh auth login` and try again."
+        )
+    if any(
+        marker in normalized
+        for marker in (
+            "http 404",
+            "status code 404",
+            "could not resolve to a pullrequest",
+            "could not resolve to a repository",
+            "no pull requests found",
+            "repository not found",
+        )
+    ):
+        return GhNotFoundError(
+            f"GitHub resource was not found while running `gh {' '.join(args)}`: {detail}"
+        )
+    return GhCommandError(args=args, returncode=returncode, stderr=stderr)
 
 
 class GhCliBackend:
@@ -81,21 +170,7 @@ class GhCliBackend:
             ) from error
 
         if completed.returncode != 0:
-            normalized = completed.stderr.casefold()
-            if any(
-                marker in normalized
-                for marker in (
-                    "not logged into",
-                    "authentication",
-                    "http 401",
-                    "bad credentials",
-                    "oauth token",
-                )
-            ):
-                raise GhAuthenticationError(
-                    "GitHub CLI is not authenticated. Run `gh auth login` and try again."
-                )
-            raise GhCommandError(
+            raise _mapped_command_error(
                 args=command_args,
                 returncode=completed.returncode,
                 stderr=completed.stderr,

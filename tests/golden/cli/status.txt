@@ -1,0 +1,15 @@
+Session: feature/review
+Base: 1111111111111111111111111111111111111111
+Final: 2222222222222222222222222222222222222222
+Action needed: 1 unassigned, 0 ambiguous
+Focus: -
+Defaulted by focus: (none)
+Slices:
+  ID  STATUS  DIFFSTAT  PR  TITLE
+  review  active  0 files +0 -0  -  Review behavior
+Action-needed atoms:
+  a1b2c3d4  unassigned  owner=-  scenario.txt  base:2+1  final:2+1
+    -base
+    +final
+Assigned/updated atoms:
+  (none)

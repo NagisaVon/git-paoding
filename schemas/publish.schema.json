@@ -200,6 +200,11 @@
       "additionalProperties": false,
       "description": "Status-safe summary of persistent session identity.",
       "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
         "base_oid": {
           "minLength": 1,
           "title": "Base Oid",
@@ -261,6 +266,14 @@
           ],
           "default": null,
           "title": "Last Final Oid"
+        },
+        "slice_pr_prefix": {
+          "default": "slice",
+          "maxLength": 40,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "title": "Slice Pr Prefix",
+          "type": "string"
         }
       },
       "required": [
@@ -343,6 +356,14 @@
           "default": 0,
           "title": "Contract Version",
           "type": "integer"
+        },
+        "defaulted_atom_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Defaulted Atom Ids",
+          "type": "array"
         },
         "session": {
           "$ref": "#/$defs/SessionSummary"
