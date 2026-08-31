@@ -9,7 +9,7 @@
       "name": "git-paoding",
       "source": "./src/git_paoding/_agent_plugins/git-paoding",
       "description": "Teach Claude Code to create semantic Draft PR review projections from one canonical change.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }

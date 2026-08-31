@@ -1,6 +1,6 @@
 {
   "name": "git-paoding",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Teach Codex to partition a canonical change into semantic Draft PR review projections.",
   "author": {
     "name": "NagisaVon"
