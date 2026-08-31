@@ -26,7 +26,11 @@ from git_paoding.core.model import (
     StatusResult,
 )
 from git_paoding.core.progress import ProgressCallback, ProgressEvent, PublishPhase, publish_phase
-from git_paoding.core.projection import build_projection
+from git_paoding.core.projection import (
+    ProjectionContext,
+    build_projections,
+    load_projection_context,
+)
 from git_paoding.core.reconcile import reconcile
 from git_paoding.github.backend import (
     DuplicatePullRequestMarkerError,
@@ -417,12 +421,6 @@ def publish_session(
                 if existing is not None:
                     resolved_prs[slice_.id] = existing
 
-        with publish_phase(
-            progress,
-            ProgressEvent(PublishPhase.LOAD_CONTEXT, "Loading shared projection context"),
-        ):
-            current_replay_atoms = _owned_replay_atoms(replay_atoms, session)
-
         projection_targets = [
             slice_
             for slice_ in session.slices
@@ -431,6 +429,22 @@ def publish_session(
                 any(atom.owner == slice_.id for atom in session.atoms) or slice_.id in resolved_prs
             )
         ]
+        with publish_phase(
+            progress,
+            ProgressEvent(PublishPhase.LOAD_CONTEXT, "Loading shared projection context"),
+        ):
+            current_replay_atoms = _owned_replay_atoms(replay_atoms, session)
+            projection_context: ProjectionContext | None = None
+            if projection_targets:
+                if session.last_final_oid is None:
+                    raise PublishError("Reconciliation did not resolve a canonical final commit")
+                projection_context = load_projection_context(
+                    repository,
+                    base_oid=session.base_oid,
+                    final_oid=session.last_final_oid,
+                    replay_atoms=current_replay_atoms,
+                )
+
         first_projection = projection_targets[0].id if projection_targets else "none"
         with publish_phase(
             progress,
@@ -446,6 +460,14 @@ def publish_session(
             ),
         ):
             built_slices: dict[str, _BuiltSlice] = {}
+            projections = (
+                build_projections(
+                    projection_context,
+                    tuple(slice_.id for slice_ in projection_targets),
+                )
+                if projection_context is not None
+                else {}
+            )
             for index, slice_ in enumerate(projection_targets, start=1):
                 if index > 1 and progress is not None:
                     progress(
@@ -456,16 +478,8 @@ def publish_session(
                             total=len(projection_targets),
                         )
                     )
-                if session.last_final_oid is None:
-                    raise PublishError("Reconciliation did not resolve a canonical final commit")
                 refs = generated_refs(branch_key(session.canonical_branch), slice_.id)
-                projection = build_projection(
-                    repository,
-                    base_oid=session.base_oid,
-                    final_oid=session.last_final_oid,
-                    slice_id=slice_.id,
-                    replay_atoms=current_replay_atoms,
-                )
+                projection = projections[slice_.id]
                 built_slices[slice_.id] = _BuiltSlice(
                     base_ref=_short_ref(refs.base),
                     head_ref=_short_ref(refs.head),
