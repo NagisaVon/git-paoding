@@ -101,20 +101,17 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
 ) -> None:
     status = _status()
     calls: list[tuple[object, ...]] = []
-    backend = object()
 
     def fake_backend(repo: Path) -> object:
-        calls.append(("backend", repo))
-        return backend
+        raise AssertionError(f"init --base must not construct a backend for {repo}")
 
     def fake_init(
         repo: Path,
         base: str,
         *,
-        backend: object,
         slice_pr_prefix: str,
     ) -> StatusResult:
-        calls.append(("init", repo, base, backend, slice_pr_prefix))
+        calls.append(("init", repo, base, slice_pr_prefix))
         return status
 
     def fake_add(repo: Path, slice_id: str, title: str) -> StatusResult:
@@ -168,8 +165,7 @@ def test_init_slice_add_and_assign_dispatch_only_through_facade(
 
     assert init_result.exit_code == add_result.exit_code == assign_result.exit_code == 0
     assert calls == [
-        ("backend", Path.cwd()),
-        ("init", Path.cwd(), "origin/main", backend, "ABC-123"),
+        ("init", Path.cwd(), "origin/main", "ABC-123"),
         ("add", Path.cwd(), "storage", "Storage"),
         ("assign", Path.cwd(), "storage", ("a1", "app.py"), False),
     ]

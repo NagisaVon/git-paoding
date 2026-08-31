@@ -24,7 +24,6 @@ class CliFacade(Protocol):
         repo: Path,
         base: str,
         *,
-        backend: GitHubBackend,
         slice_pr_prefix: str = "slice",
     ) -> StatusResult: ...
 
@@ -76,10 +75,9 @@ class ApiFacade:
         repo: Path,
         base: str,
         *,
-        backend: GitHubBackend,
         slice_pr_prefix: str = "slice",
     ) -> StatusResult:
-        return api.init_session(repo, base, backend=backend, slice_pr_prefix=slice_pr_prefix)
+        return api.init_session(repo, base, slice_pr_prefix=slice_pr_prefix)
 
     def add_slice(self, repo: Path, slice_id: str, title: str) -> StatusResult:
         return api.add_slice(repo, slice_id, title)

@@ -64,18 +64,19 @@ never makes publication irrecoverable.
 ## Prepare the session
 
 Work from the branch containing the complete committed change. Confirm the CLI
-and `gh` 2.45.0 or newer are available, `gh` is authenticated, and the canonical
-branch is available on the Git remote. Do not push a branch without the change
-owner's authorization.
+and `gh` 2.45.0 or newer are available, and the canonical branch exists locally.
+Do not push a branch without the change owner's authorization.
 
 ```bash
 git-paoding --version
 gh --version
-gh auth status
-git-paoding init --base origin/main --slice-prefix ABC-123
+git-paoding init --base <real-integration-target-ref> --slice-prefix ABC-123
 git-paoding slice add storage --title "Storage boundary"
 git-paoding slice add tests --title "Storage behavior tests"
 ```
+
+`<real-integration-target-ref>` is a placeholder for an existing local or
+remote-tracking branch; it is never a default.
 
 Omit `--slice-prefix` to use `slice`. The prefix changes only slice PR titles;
 it does not change stable slice IDs or generated refs. An integration PR that
@@ -84,6 +85,11 @@ adopts an existing integration PR, it preserves that PR's title exactly.
 
 The base is pinned to a commit at initialization. Choose the real integration
 target; do not silently change it later.
+
+A read-only `gh` failure inside a sandbox is inconclusive; retry the identical
+command out-of-sandbox via the platform's approval mechanism; diagnose invalid
+credentials only on a confirmed HTTP 401; never print token contents; never
+start `gh auth login` before that confirmation.
 
 ## Classify and publish
 

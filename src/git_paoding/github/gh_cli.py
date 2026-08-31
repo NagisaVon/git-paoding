@@ -108,18 +108,16 @@ def _mapped_command_error(
     ):
         return GhNetworkError(
             f"Could not reach GitHub while running `gh {' '.join(args)}`: {detail}. "
-            "Check the network connection and try again."
+            "Check the network connection and try again; a sandbox or network policy may also "
+            "block this connection."
         )
     if any(
         marker in normalized
         for marker in (
             "not logged into",
-            "authentication required",
-            "authentication failed",
-            "authentication",
             "http 401",
+            "status code 401",
             "bad credentials",
-            "oauth token",
         )
     ):
         return GhAuthenticationError(
@@ -195,12 +193,7 @@ class GhCliBackend:
                 "https://cli.github.com/."
             )
 
-        try:
-            self._run(("auth", "status"))
-        except GhCommandError as error:
-            raise GhAuthenticationError(
-                "GitHub CLI is not authenticated. Run `gh auth login` and try again."
-            ) from error
+        self._run(("auth", "status"))
 
     def create_draft_pr(
         self,
