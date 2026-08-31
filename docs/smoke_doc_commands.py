@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # cspell:words paoding PAODING
-"""Smoke the commands documented in README.md and docs/SKILL.md.
+"""Smoke the commands documented in README.md and the packaged SKILL.md.
 
 The default path exercises every documented command in an isolated repository,
 including a full publish and archive against a local bare remote and a stateful

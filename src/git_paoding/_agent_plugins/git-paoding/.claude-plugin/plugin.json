@@ -1,0 +1,12 @@
+{
+  "name": "git-paoding",
+  "version": "0.1.0",
+  "description": "Teach Claude Code to partition a canonical change into semantic Draft PR review projections.",
+  "author": {
+    "name": "NagisaVon"
+  },
+  "homepage": "https://github.com/NagisaVon/git-paoding",
+  "repository": "https://github.com/NagisaVon/git-paoding",
+  "license": "MIT",
+  "keywords": ["git", "github", "code-review", "pull-requests"]
+}

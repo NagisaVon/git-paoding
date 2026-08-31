@@ -1,0 +1,22 @@
+{
+  "name": "git-paoding",
+  "version": "0.1.0",
+  "description": "Teach Codex to partition a canonical change into semantic Draft PR review projections.",
+  "author": {
+    "name": "NagisaVon"
+  },
+  "homepage": "https://github.com/NagisaVon/git-paoding",
+  "repository": "https://github.com/NagisaVon/git-paoding",
+  "license": "MIT",
+  "keywords": ["git", "github", "code-review", "pull-requests"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "git-paoding",
+    "shortDescription": "Create semantic review projections from one canonical change.",
+    "longDescription": "Guide Codex through git-paoding's inspect, assign, publish, refresh, and archive workflow while keeping one authoritative integration branch.",
+    "developerName": "NagisaVon",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use git-paoding to prepare semantic Draft PR review projections for the committed change on my current branch. Inspect first and do not publish until I authorize remote changes."
+  }
+}

@@ -63,11 +63,14 @@ never makes publication irrecoverable.
 
 ## Prepare the session
 
-Work from the branch containing the complete committed change. Confirm `gh`
-2.45.0 or newer is authenticated and that the canonical branch is available on
-the Git remote. Do not push a branch without the author's authorization.
+Work from the branch containing the complete committed change. Confirm the CLI
+and `gh` 2.45.0 or newer are available, `gh` is authenticated, and the canonical
+branch is available on the Git remote. Do not push a branch without the change
+owner's authorization.
 
 ```bash
+git-paoding --version
+gh --version
 gh auth status
 git-paoding init --base origin/main --slice-prefix ABC-123
 git-paoding slice add storage --title "Storage boundary"
@@ -201,18 +204,3 @@ git-paoding archive
 `archive` closes slice PRs, retains their URLs and discussion history, and
 cleans generated refs; it never merges them. It refuses to run while the
 integration PR is still open or merely closed.
-
-## Validate the installed workflow
-
-From the `git-paoding` repository, run the isolated documentation smoke:
-
-```bash
-uv run --no-sync python docs/smoke_doc_commands.py
-```
-
-Run the strict release gate to require batch, `--force`, focus, slice lifecycle,
-and archive commands:
-
-```bash
-PAODING_REQUIRE_FINAL_CLI=1 uv run --no-sync python docs/smoke_doc_commands.py
-```

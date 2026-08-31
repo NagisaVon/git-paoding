@@ -37,12 +37,22 @@ jobs:
           python -c 'import glob, zipfile; wheel = glob.glob("dist/*.whl"); assert len(wheel) == 1; assert "git_paoding/py.typed" in zipfile.ZipFile(wheel[0]).namelist()'
           tar -tzf dist/*.tar.gz | grep -q '/src/git_paoding/py.typed$'
 
+      - name: Verify agent plugins are packaged
+        run: |
+          python -c 'import glob, zipfile; names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist(); root = "git_paoding/_agent_plugins/git-paoding/"; assert root + ".codex-plugin/plugin.json" in names; assert root + ".claude-plugin/plugin.json" in names; assert root + "skills/git-paoding/SKILL.md" in names'
+          tar -tzf dist/*.tar.gz | grep -q '/src/git_paoding/_agent_plugins/git-paoding/skills/git-paoding/SKILL.md$'
+
       - name: Install and run wheel in a fresh virtual environment
         run: |
           uv venv --python 3.13 "${RUNNER_TEMP}/wheel-venv"
           uv pip install --python "${RUNNER_TEMP}/wheel-venv/bin/python" dist/*.whl
           "${RUNNER_TEMP}/wheel-venv/bin/git-paoding" --version
           PATH="${RUNNER_TEMP}/wheel-venv/bin:${PATH}" git paoding --version
+          mkdir "${RUNNER_TEMP}/wheel-agent-install"
+          cd "${RUNNER_TEMP}/wheel-agent-install"
+          "${RUNNER_TEMP}/wheel-venv/bin/git-paoding" agent install --target codex --target claude --scope project
+          test -f .agents/skills/git-paoding/SKILL.md
+          test -f .claude/skills/git-paoding/SKILL.md
 
       - name: Install and run source distribution in a fresh virtual environment
         run: |

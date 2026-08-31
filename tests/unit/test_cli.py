@@ -296,7 +296,7 @@ def test_help_documents_public_exit_codes_and_complete_command_surface() -> None
     assert "0 = success/clean" in result.output
     assert "2 = action needed" in result.output
     assert "1 = operational error" in result.output
-    for command in ("archive", "assign", "focus", "publish", "slice", "status"):
+    for command in ("agent", "archive", "assign", "focus", "publish", "slice", "status"):
         assert command in result.output
 
 
