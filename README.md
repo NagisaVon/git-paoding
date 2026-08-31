@@ -37,9 +37,13 @@ and diffstat before pinning the session:
 ```bash
 git-paoding init --pr <integration-pr-number-or-url>
 git-paoding slice add <slice-id> --title "<review concern>"
-git-paoding status --paths --action-needed-only
-git-paoding assign <slice-id> <path-or-atom-selector>
-git-paoding publish
+git-paoding status --summary --json
+git-paoding status --paths --action-needed-only --json
+git-paoding status --path <exact-path> --json
+git-paoding assign --batch <assignment-plan.json> --quiet --json
+git-paoding status --summary --json
+# Ask for authorization immediately before this remote mutation.
+git-paoding publish --json --network-timeout 120
 ```
 
 If no integration PR exists yet, pin an explicit branch that is available locally:

@@ -21,9 +21,12 @@ from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATED_COMMANDS = (
+    "git-paoding init --pr <integration-pr-number-or-url>",
+    "git-paoding init --replace --base <integration-target-branch>",
+    "git-paoding init --replace --pr <integration-pr-number-or-url>",
     "git-paoding status --summary --json",
     "git-paoding status --paths --action-needed-only --json",
-    "git-paoding status --full",
+    "git-paoding status --path <exact-path> --full --json",
     "git-paoding assign --batch paoding-assignments.json --quiet --json",
     "git-paoding assign storage src/storage.py --force",
     "git-paoding focus storage",
@@ -124,6 +127,12 @@ def fake_gh(args: list[str]) -> int:
             "isDraft": "--draft" in args,
             "baseRefName": option_value(args, "--base"),
             "headRefName": option_value(args, "--head"),
+            "baseRefOid": os.environ.get("PAODING_FAKE_BASE_OID", "0" * 40),
+            "headRefOid": os.environ.get("PAODING_FAKE_HEAD_OID", "0" * 40),
+            "changedFiles": int(os.environ.get("PAODING_FAKE_CHANGED_FILES", "0")),
+            "additions": int(os.environ.get("PAODING_FAKE_ADDITIONS", "0")),
+            "deletions": int(os.environ.get("PAODING_FAKE_DELETIONS", "0")),
+            "isCrossRepository": False,
         }
         prs.append(record)
         save_fake_state(state_path, state)
@@ -222,10 +231,51 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     git(["add", "src/storage.py", "tests/test_storage.py"], cwd=repository, env=env)
     git(["commit", "-m", "add storage behavior"], cwd=repository, env=env)
     git(["push", "-u", "origin", "HEAD"], cwd=repository, env=env)
+    env["PAODING_FAKE_BASE_OID"] = git(["rev-parse", "main"], cwd=repository, env=env)
+    env["PAODING_FAKE_HEAD_OID"] = git(["rev-parse", "HEAD"], cwd=repository, env=env)
+    env["PAODING_FAKE_CHANGED_FILES"] = "2"
+    env["PAODING_FAKE_ADDITIONS"] = "3"
+    env["PAODING_FAKE_DELETIONS"] = "0"
+    integration_url = run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--draft",
+            "--base",
+            "main",
+            "--head",
+            "feature/review",
+            "--title",
+            "Documentation smoke integration",
+            "--body",
+            "Local documentation smoke.",
+        ],
+        cwd=repository,
+        env=env,
+    ).stdout.strip()
 
     run([*command, "--help"], cwd=repository, env=env)
     run(
-        [*command, "init", "--base", "origin/main", "--slice-prefix", "ABC-123"],
+        [*command, "init", "--pr", integration_url, "--slice-prefix", "ABC-123"],
+        cwd=repository,
+        env=env,
+    )
+    run(
+        [*command, "init", "--replace", "--base", "main", "--slice-prefix", "ABC-123"],
+        cwd=repository,
+        env=env,
+    )
+    run(
+        [
+            *command,
+            "init",
+            "--replace",
+            "--pr",
+            integration_url,
+            "--slice-prefix",
+            "ABC-123",
+        ],
         cwd=repository,
         env=env,
     )
@@ -250,17 +300,64 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
     )
     if len(json.loads(paths.stdout)["paths"]) != 2:
         raise RuntimeError(f"unexpected action-needed paths: {paths.stdout}")
-    status = run([*command, "status", "--json"], cwd=repository, env=env, expected=2)
-    payload = json.loads(status.stdout)
-    if payload["unassigned_count"] != 2:
-        raise RuntimeError(f"expected two unassigned atoms, got {payload!r}")
-    if payload["session"]["slice_pr_prefix"] != "ABC-123":
-        raise RuntimeError(f"slice title prefix was not persisted: {payload!r}")
-    run([*command, "status", "--full"], cwd=repository, env=env, expected=2)
-
-    run([*command, "assign", "storage", "src/storage.py"], cwd=repository, env=env)
-    run([*command, "assign", "tests", "tests/test_storage.py"], cwd=repository, env=env)
-    run([*command, "status", "--json"], cwd=repository, env=env)
+    targeted = run(
+        [
+            *command,
+            "status",
+            "--path",
+            "src/storage.py",
+            "--path",
+            "tests/test_storage.py",
+            "--json",
+        ],
+        cwd=repository,
+        env=env,
+        expected=2,
+    )
+    if json.loads(targeted.stdout)["returned_atom_count"] != 2:
+        raise RuntimeError(f"unexpected targeted status: {targeted.stdout}")
+    full = run(
+        [*command, "status", "--path", "src/storage.py", "--full", "--json"],
+        cwd=repository,
+        env=env,
+        expected=2,
+    )
+    if json.loads(full.stdout)["returned_atom_count"] != 1:
+        raise RuntimeError(f"unexpected full atom view: {full.stdout}")
+    batch_path = repository / "paoding-assignments.json"
+    batch_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 0,
+                "assignments": {
+                    "storage": ["src/storage.py"],
+                    "tests": ["tests/test_storage.py"],
+                },
+                "force": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assignment = run(
+        [
+            *command,
+            "assign",
+            "--batch",
+            "paoding-assignments.json",
+            "--quiet",
+            "--json",
+        ],
+        cwd=repository,
+        env=env,
+    )
+    if any(record["preview"] for record in json.loads(assignment.stdout)["assigned"]):
+        raise RuntimeError(f"quiet assignment leaked previews: {assignment.stdout}")
+    clean_summary = run([*command, "status", "--summary", "--json"], cwd=repository, env=env)
+    clean_payload = json.loads(clean_summary.stdout)
+    if clean_payload["unassigned_count"] or clean_payload["ambiguous_count"]:
+        raise RuntimeError(f"assignment did not resolve global status: {clean_payload!r}")
+    if clean_payload["session"]["slice_pr_prefix"] != "ABC-123":
+        raise RuntimeError(f"slice title prefix was not persisted: {clean_payload!r}")
     first = run(
         [*command, "publish", "--json", "--quiet", "--network-timeout", "0"],
         cwd=repository,
@@ -276,12 +373,16 @@ def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) 
         if pr["headRefName"] == "feature/review" and "paoding-slice-id" not in pr["body"]
     )
     slice_prs = [pr for pr in fake_state["prs"] if "paoding-slice-id" in pr["body"]]
-    if integration_pr["title"] != "feature/review":
+    if integration_pr["title"] != "Documentation smoke integration":
         raise RuntimeError(f"unexpected integration PR title: {integration_pr!r}")
     if not all(pr["title"].startswith("[ABC-123] ") for pr in slice_prs):
         raise RuntimeError(f"unexpected slice PR titles: {slice_prs!r}")
-    if not all(pr["body"].startswith("<!-- paoding-managed:start -->") for pr in fake_state["prs"]):
-        raise RuntimeError(f"new PR bodies must begin with the managed region: {fake_state!r}")
+    if not all(pr["body"].startswith("<!-- paoding-managed:start -->") for pr in slice_prs):
+        raise RuntimeError(f"new slice PR bodies must begin with the managed region: {slice_prs!r}")
+    if not integration_pr["body"].startswith(
+        "Local documentation smoke.\n\n<!-- paoding-managed:start -->"
+    ):
+        raise RuntimeError(f"integration PR narrative was not preserved: {integration_pr!r}")
     second = run([*command, "publish", "--json", "--quiet"], cwd=repository, env=env)
     second_payload = json.loads(second.stdout)
     if {item["outcome"] for item in second_payload["slices"]} != {"no-op"}:
@@ -293,12 +394,14 @@ def integrated_cli_available(command: list[str], workspace: Path, env: dict[str,
     """Check whether all documented command groups and options are available."""
 
     top = run([*command, "--help"], cwd=workspace, env=env).stdout
+    init = run([*command, "init", "--help"], cwd=workspace, env=env).stdout
     status = run([*command, "status", "--help"], cwd=workspace, env=env).stdout
     assign = run([*command, "assign", "--help"], cwd=workspace, env=env).stdout
     publish = run([*command, "publish", "--help"], cwd=workspace, env=env).stdout
     slice_help = run([*command, "slice", "--help"], cwd=workspace, env=env).stdout
     return (
         all(name in top for name in ("focus", "archive"))
+        and all(option in init for option in ("--pr", "--base", "--replace"))
         and all(option in status for option in ("--summary", "--paths", "--action-needed-only"))
         and all(option in assign for option in ("--batch", "--force", "--quiet"))
         and all(option in publish for option in ("--quiet", "--trace", "--network-timeout"))

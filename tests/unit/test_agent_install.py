@@ -26,6 +26,14 @@ def _packaged_skill_text() -> str:
     )
 
 
+def _documented_commands() -> list[str]:
+    return [
+        line.strip()
+        for line in _packaged_skill_text().splitlines()
+        if line.startswith("git-paoding ")
+    ]
+
+
 @pytest.mark.unit
 def test_installs_codex_and_claude_skills_at_project_scope(tmp_path: Path) -> None:
     codex = install_agent_skill("codex", "project", project_root=tmp_path)
@@ -127,3 +135,70 @@ def test_project_and_lock_versions_match_package_version() -> None:
     )
 
     assert project["project"]["version"] == locked_project["version"] == __version__
+
+
+@pytest.mark.unit
+def test_packaged_skill_has_one_pr_first_bounded_workflow() -> None:
+    text = _packaged_skill_text()
+    commands = _documented_commands()
+    status_commands = [command for command in commands if command.startswith("git-paoding status")]
+
+    assert commands.index(
+        "git-paoding init --pr <integration-pr-number-or-url> --slice-prefix ABC-123"
+    ) < commands.index("git-paoding init --base <integration-target-branch> --slice-prefix ABC-123")
+    summary = "git-paoding status --summary --json"
+    paths = "git-paoding status --paths --action-needed-only --json"
+    targeted = "git-paoding status --path <exact-path> --path <related-path> --json"
+    assert {summary, paths, targeted}.issubset(status_commands)
+    assert (
+        status_commands.index(summary)
+        < status_commands.index(paths)
+        < status_commands.index(targeted)
+    )
+    assert status_commands.count(summary) >= 2
+    assert "git-paoding status --json" not in commands
+    assert "### 1. Inspect" not in text
+    assert commands.count("git-paoding publish --json --trace --network-timeout 120") == 1
+
+
+@pytest.mark.unit
+def test_packaged_skill_covers_decision_changing_v012_interfaces() -> None:
+    text = _packaged_skill_text()
+    normalized = " ".join(text.split())
+    commands = _documented_commands()
+
+    assert {
+        "git-paoding init --replace --pr <correct-integration-pr-number-or-url>",
+        "git-paoding init --replace --base <correct-integration-target-branch>",
+        "git-paoding assign --batch paoding-assignments.json --quiet --json",
+        "git-paoding archive",
+    }.issubset(commands)
+    for decision in (
+        "`init --base` is local-only",
+        "each `preview` value as an empty string",
+        "Progress and trace output go to stderr",
+        "atomic push with an exact lease per destination",
+        "concurrent publisher",
+        "compatibility fallback is deliberately disabled",
+        "`replace_session()`",
+        "`StatusViewResult` v0",
+    ):
+        assert decision in normalized
+
+    assert all(
+        decision in normalized
+        for decision in (
+            "sandboxed authentication or connection failure",
+            "identical read-only command outside the sandbox",
+            "elevated retry returns HTTP 401",
+            "Never expose tokens or start `gh auth login`",
+        )
+    )
+    assert all(
+        decision in normalized
+        for decision in (
+            "`--summary` and `--paths` are mutually exclusive",
+            "Repeatable `--path` is an atom view and cannot combine with either one",
+            "`--full` expands atom previews only",
+        )
+    )
