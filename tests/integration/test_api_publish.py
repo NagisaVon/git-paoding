@@ -362,6 +362,13 @@ def test_existing_slice_that_becomes_empty_stays_open_with_note(
     first = publish(scratch.path, backend=fake_backend)
     slice_pr_number = first.slices[0].pr_number
     assert slice_pr_number is not None
+    refs = generated_refs(branch_key("main"), "review")
+    refs_before = {
+        item.ref: item.oid for item in ls_remote(scratch.path, "origin", refs.base, refs.head)
+    }
+    assert run_git(
+        ("diff", refs_before[refs.base], refs_before[refs.head]), cwd=scratch.path
+    ).stdout
 
     reverted_oid = commit_tree(
         scratch.path,
@@ -389,6 +396,15 @@ def test_existing_slice_that_becomes_empty_stays_open_with_note(
     assert second.slices[0].pr_number == slice_pr_number
     assert fake_backend.prs[slice_pr_number].state is PRState.OPEN
     assert "_This slice is currently empty._" in fake_backend.prs[slice_pr_number].body
+    refs_after = {
+        item.ref: item.oid for item in ls_remote(scratch.path, "origin", refs.base, refs.head)
+    }
+    assert refs_after.keys() == refs_before.keys()
+    assert refs_after != refs_before
+    assert (
+        run_git(("diff", refs_after[refs.base], refs_after[refs.head]), cwd=scratch.path).stdout
+        == b""
+    )
 
 
 def test_focus_defaults_new_atoms_and_publish_reports_them(

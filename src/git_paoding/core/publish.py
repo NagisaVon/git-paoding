@@ -346,16 +346,28 @@ def publish_session(
         backend.check_ready()
         open_prs = backend.list_open_prs()
         existing_integration_pr = _find_integration_pr(backend, session, open_prs)
+        resolved_prs: dict[str, PRRecord] = {}
+        for slice_ in session.slices:
+            existing = _find_slice_pr(
+                backend,
+                slice_id=slice_.id,
+                stored_number=slice_.pr_number,
+                open_prs=open_prs,
+            )
+            if existing is not None:
+                resolved_prs[slice_.id] = existing
         current_replay_atoms = _owned_replay_atoms(replay_atoms, session)
 
-        # Prepare every non-empty active projection before mutating any pull
-        # request. A projection or push failure can therefore never leave a
-        # newly-created PR pointing at incomplete generated refs.
+        # Prepare every active projection needed by a current pull request
+        # before mutating any pull request. Brand-new empty slices need no
+        # refs, while an existing slice that became empty needs a zero-diff
+        # projection so its Files changed view cannot retain stale content.
         prepared_slices: dict[str, _PreparedSlice] = {}
         for slice_ in session.slices:
             if slice_.status is not SliceStatus.ACTIVE:
                 continue
-            if not any(atom.owner == slice_.id for atom in session.atoms):
+            owns_atoms = any(atom.owner == slice_.id for atom in session.atoms)
+            if not owns_atoms and slice_.id not in resolved_prs:
                 continue
             if session.last_final_oid is None:
                 raise PublishError("Reconciliation did not resolve a canonical final commit")
@@ -379,17 +391,6 @@ def publish_session(
                     head_oid=projection.head_commit_oid,
                 ),
             )
-
-        resolved_prs: dict[str, PRRecord] = {}
-        for slice_ in session.slices:
-            existing = _find_slice_pr(
-                backend,
-                slice_id=slice_.id,
-                stored_number=slice_.pr_number,
-                open_prs=open_prs,
-            )
-            if existing is not None:
-                resolved_prs[slice_.id] = existing
 
         integration_pr = existing_integration_pr or _create_integration_pr(
             backend, session, remote=remote
