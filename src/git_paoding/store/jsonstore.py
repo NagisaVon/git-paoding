@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,7 @@ class JsonSessionStore:
         self.repo = repo.resolve()
         self.root = paoding_dir(self.repo)
         self.sessions_dir = self.root / "sessions"
+        self.backups_dir = self.root / "backups"
 
     def session_path(self, canonical_branch: str) -> Path:
         """Return the canonical path for a branch's session JSON."""
@@ -140,3 +142,42 @@ class JsonSessionStore:
                 temporary_path.unlink(missing_ok=True)
             raise SessionValidationError(f"Could not write session file {path}: {error}") from error
         return path
+
+    def backup(self, canonical_branch: str) -> Path:
+        """Atomically copy the active session bytes into the backup directory."""
+
+        source = self.session_path(canonical_branch)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        destination = self.backups_dir / f"{branch_key(canonical_branch)}.{timestamp}.json"
+        try:
+            content = source.read_bytes()
+        except FileNotFoundError as error:
+            raise SessionNotFoundError(
+                f"No git-paoding session exists for branch {canonical_branch!r}"
+            ) from error
+        except OSError as error:
+            raise SessionValidationError(
+                f"Could not read session file {source} for backup: {error}"
+            ) from error
+
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=self.backups_dir,
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+            )
+            temporary_path = Path(temporary_name)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, destination)
+        except OSError as error:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise SessionValidationError(
+                f"Could not back up session file {source} to {destination}: {error}"
+            ) from error
+        return destination

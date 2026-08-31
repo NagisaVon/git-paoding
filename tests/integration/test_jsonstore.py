@@ -62,6 +62,41 @@ def test_store_round_trip_and_branch_keying(scratch_repo_factory: ScratchRepoFac
 
 
 @pytest.mark.integration
+def test_backup_preserves_exact_active_session_bytes(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory({"file.txt": "base\n"}, {"file.txt": "final\n"})
+    store = JsonSessionStore(repo.path)
+    session = _session("feature/backup", repo.base_oid)
+    active_path = store.save(session)
+    original = active_path.read_bytes()
+
+    backup_path = store.backup(session.canonical_branch)
+
+    assert backup_path.parent == store.backups_dir
+    assert backup_path.name.startswith(f"{branch_key(session.canonical_branch)}.")
+    assert backup_path.name.endswith("Z.json")
+    assert backup_path.read_bytes() == original
+
+
+@pytest.mark.integration
+def test_v011_session_without_publication_flag_loads_as_not_started(
+    scratch_repo_factory: ScratchRepoFactory,
+) -> None:
+    repo = scratch_repo_factory({"file.txt": "base\n"}, {"file.txt": "final\n"})
+    store = JsonSessionStore(repo.path)
+    session = _session("feature/legacy", repo.base_oid)
+    path = store.save(session)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["publication_started"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = store.load(session.canonical_branch)
+
+    assert loaded.publication_started is False
+
+
+@pytest.mark.integration
 def test_missing_session_is_clear_and_read_only(scratch_repo_factory: ScratchRepoFactory) -> None:
     repo = scratch_repo_factory({}, {})
     store = JsonSessionStore(repo.path)
