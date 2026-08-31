@@ -91,6 +91,19 @@ def _prepare_repository(
     return scratch, remote
 
 
+def _integration_pr(number: int, *, base_ref: str) -> PRRecord:
+    return PRRecord(
+        number=number,
+        url=f"https://example.test/pulls/{number}",
+        title="main",
+        body="",
+        state=PRState.OPEN,
+        is_draft=True,
+        base_ref=base_ref,
+        head_ref="main",
+    )
+
+
 def _commit_added_root_file(
     scratch: ScratchRepository,
     *,
@@ -204,6 +217,119 @@ def test_unassigned_publish_has_zero_remote_calls_or_ref_writes(
     assert result.status.unassigned_count == 1
     assert result.status.atoms[0].state is AtomState.UNASSIGNED
     assert fake_backend.call_log == []
+    assert _generated_local_refs(scratch.path) == ()
+    assert ls_remote(scratch.path, "origin", "refs/heads/paoding/*") == ()
+
+
+def test_publish_adopts_exact_head_and_base_integration_pr(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    fake_backend.seed(_integration_pr(40, base_ref="base"))
+
+    result = publish(scratch.path, backend=fake_backend)
+
+    assert result.integration_pr == 40
+    assert fake_backend.creates == [41]  # slice only; integration #40 was adopted
+    assert JsonSessionStore(scratch.path).load("main").integration_pr == 40
+    assert result.slices[0].pr_number == 41
+    assert fake_backend.prs[41].url in fake_backend.prs[40].body
+
+
+def test_publish_rejects_same_head_wrong_base_before_remote_writes(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    conflicting = _integration_pr(40, base_ref="release")
+    fake_backend.seed(conflicting)
+
+    with pytest.raises(PublishError) as caught:
+        publish(scratch.path, backend=fake_backend)
+
+    message = str(caught.value)
+    assert "expected base 'base'" in message
+    assert "#40 (base 'release')" in message
+    assert fake_backend.prs[40] == conflicting
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
+    assert _generated_local_refs(scratch.path) == ()
+    assert ls_remote(scratch.path, "origin", "refs/heads/paoding/*") == ()
+    stored = JsonSessionStore(scratch.path).load("main")
+    assert stored.integration_pr is None
+    assert stored.slices[0].pr_number is None
+
+
+def test_publish_selects_exact_base_among_same_head_candidates(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    conflicting = _integration_pr(40, base_ref="release")
+    fake_backend.seed(conflicting)
+    fake_backend.seed(_integration_pr(41, base_ref="base"))
+
+    result = publish(scratch.path, backend=fake_backend)
+
+    assert result.integration_pr == 41
+    assert JsonSessionStore(scratch.path).load("main").integration_pr == 41
+    assert fake_backend.creates == [42]  # slice only
+    assert 40 not in fake_backend.updates
+    assert fake_backend.prs[40] == conflicting
+    assert fake_backend.prs[42].url in fake_backend.prs[41].body
+
+
+def test_publish_rejects_multiple_exact_integration_prs_before_remote_writes(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    fake_backend.seed(_integration_pr(41, base_ref="base"))
+    fake_backend.seed(_integration_pr(40, base_ref="base"))
+
+    with pytest.raises(PublishError) as caught:
+        publish(scratch.path, backend=fake_backend)
+
+    message = str(caught.value)
+    assert "expected base 'base'" in message
+    assert "#40, #41" in message
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
+    assert _generated_local_refs(scratch.path) == ()
+    assert ls_remote(scratch.path, "origin", "refs/heads/paoding/*") == ()
+
+
+def test_publish_rejects_stored_open_integration_pr_with_wrong_base(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    fake_backend.seed(_integration_pr(40, base_ref="release"))
+    store = JsonSessionStore(scratch.path)
+    store.save(store.load("main").model_copy(update={"integration_pr": 40}))
+
+    with pytest.raises(PublishError) as caught:
+        publish(scratch.path, backend=fake_backend)
+
+    message = str(caught.value)
+    assert "Stored integration PR #40" in message
+    assert "base 'release', expected 'base'" in message
+    assert fake_backend.creates == []
+    assert fake_backend.updates == []
+    assert fake_backend.closes == []
     assert _generated_local_refs(scratch.path) == ()
     assert ls_remote(scratch.path, "origin", "refs/heads/paoding/*") == ()
 

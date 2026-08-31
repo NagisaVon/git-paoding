@@ -183,7 +183,10 @@ def _find_integration_pr(
     backend: GitHubBackend,
     session: Session,
     open_prs: list[PRRecord],
+    *,
+    remote: str,
 ) -> PRRecord | None:
+    expected_base_ref = _integration_base_ref(session, remote)
     stored: PRRecord | None = None
     if session.integration_pr is not None:
         try:
@@ -195,24 +198,49 @@ def _find_integration_pr(
                 f"Integration pull request #{stored.number} is already merged; "
                 "run `git-paoding archive` instead of publishing again"
             )
+        if stored is not None and stored.state is PRState.OPEN:
+            if stored.head_ref != session.canonical_branch:
+                raise PublishError(
+                    f"Stored integration PR #{stored.number} has head {stored.head_ref!r}, "
+                    f"expected {session.canonical_branch!r}"
+                )
+            if stored.base_ref != expected_base_ref:
+                raise PublishError(
+                    f"Stored integration PR #{stored.number} has base {stored.base_ref!r}, "
+                    f"expected {expected_base_ref!r} for canonical head "
+                    f"{session.canonical_branch!r}. Retarget or close the PR, then publish again."
+                )
 
-    matches = [pr for pr in open_prs if pr.head_ref == session.canonical_branch]
-    if len(matches) > 1:
-        numbers = ", ".join(f"#{pr.number}" for pr in matches)
-        raise PublishError(
-            f"Multiple open PRs use canonical head {session.canonical_branch!r}: {numbers}"
-        )
-    if matches:
-        return matches[0]
+    candidates = list(open_prs)
+    if (
+        stored is not None
+        and stored.state is PRState.OPEN
+        and all(pr.number != stored.number for pr in candidates)
+    ):
+        candidates.append(stored)
 
-    if stored is None or stored.state is not PRState.OPEN:
-        return None
-    if stored.head_ref != session.canonical_branch:
-        raise PublishError(
-            f"Stored integration PR #{stored.number} has head {stored.head_ref!r}, "
-            f"expected {session.canonical_branch!r}"
+    head_matches = [pr for pr in candidates if pr.head_ref == session.canonical_branch]
+    exact_matches = [pr for pr in head_matches if pr.base_ref == expected_base_ref]
+    if len(exact_matches) > 1:
+        numbers = ", ".join(
+            f"#{pr.number}" for pr in sorted(exact_matches, key=lambda pr: pr.number)
         )
-    return stored
+        raise PublishError(
+            f"Multiple open PRs use canonical head {session.canonical_branch!r} and expected "
+            f"base {expected_base_ref!r}: {numbers}. Close the duplicates, then publish again."
+        )
+    if exact_matches:
+        return exact_matches[0]
+
+    conflicts = sorted(head_matches, key=lambda pr: pr.number)
+    if conflicts:
+        details = ", ".join(f"#{pr.number} (base {pr.base_ref!r})" for pr in conflicts)
+        raise PublishError(
+            f"No open integration PR for canonical head {session.canonical_branch!r} targets "
+            f"expected base {expected_base_ref!r}; conflicting PRs: {details}. Retarget or close "
+            "the conflicting PRs, then publish again."
+        )
+    return None
 
 
 def _create_integration_pr(
@@ -345,7 +373,12 @@ def publish_session(
 
         backend.check_ready()
         open_prs = backend.list_open_prs()
-        existing_integration_pr = _find_integration_pr(backend, session, open_prs)
+        existing_integration_pr = _find_integration_pr(
+            backend,
+            session,
+            open_prs,
+            remote=remote,
+        )
         resolved_prs: dict[str, PRRecord] = {}
         for slice_ in session.slices:
             existing = _find_slice_pr(
