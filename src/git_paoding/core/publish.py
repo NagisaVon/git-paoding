@@ -425,9 +425,12 @@ def publish_session(
                 ),
             )
 
-        integration_pr = existing_integration_pr or _create_integration_pr(
-            backend, session, remote=remote
-        )
+        if existing_integration_pr is None:
+            integration_pr = _create_integration_pr(backend, session, remote=remote)
+            maintained_integration_title = _integration_title(session)
+        else:
+            integration_pr = existing_integration_pr
+            maintained_integration_title = integration_pr.title
         if integration_pr not in open_prs:
             open_prs.append(integration_pr)
         session = session.model_copy(update={"integration_pr": integration_pr.number})
@@ -548,14 +551,10 @@ def publish_session(
             integration_pr.body,
             slices=index_rows,
         )
-        desired_integration_title = _integration_title(session)
-        if (
-            integration_pr.title != desired_integration_title
-            or integration_pr.body != desired_integration_body
-        ):
+        if integration_pr.body != desired_integration_body:
             integration_pr = backend.update_pr(
                 integration_pr.number,
-                title=desired_integration_title,
+                title=maintained_integration_title,
                 body=desired_integration_body,
             )
 
