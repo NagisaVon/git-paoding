@@ -353,6 +353,87 @@ def test_atomic_rejection_still_runs_cleanup_and_records_failure(
 
 
 @pytest.mark.unit
+def test_release_trace_parser_extracts_phases_and_process_counts() -> None:
+    stderr = """Reconciling canonical diff
+Trace:
+  reconcile: 0.012s
+  validate-github: 0.340s
+  load-context: 0.125s
+  build-projection: 0.500s
+  sync-refs: 0.750s
+  slice-pr: 1.000s
+  integration-index: 0.400s
+  persist: 0.010s
+  git-local: 54 processes, 0.200s
+  git-remote: 2 processes, 0.600s
+  gh-read: 3 processes, 0.300s
+  gh-write: 9 processes, 1.100s
+"""
+
+    phases, processes = live.parse_publish_trace(stderr)
+
+    assert phases == {
+        "reconcile": 0.012,
+        "validate-github": 0.34,
+        "load-context": 0.125,
+        "build-projection": 0.5,
+        "sync-refs": 0.75,
+        "slice-pr": 1.0,
+        "integration-index": 0.4,
+        "persist": 0.01,
+    }
+    assert processes == {"git-local": 54, "git-remote": 2, "gh-read": 3, "gh-write": 9}
+
+
+@pytest.mark.unit
+def test_release_progress_observations_measure_first_line_and_longest_gap() -> None:
+    result = live.TimedCommandResult(
+        stdout="{}",
+        stderr="Reconciling canonical diff\nLoading shared projection context\nTrace:\n",
+        returncode=0,
+        duration_seconds=2.0,
+        stderr_events=(
+            (0.2, "Reconciling canonical diff"),
+            (0.8, "Loading shared projection context"),
+            (1.9, "Trace:"),
+        ),
+    )
+
+    observations = live.progress_observations(result)
+
+    assert observations["first_progress_seconds"] == 0.2
+    assert observations["first_progress_within_one_second"] is True
+    assert observations["progress_event_count"] == 2
+    assert observations["longest_silent_interval"] == {
+        "seconds": 1.2,
+        "after": "Loading shared projection context",
+        "before": "command-end",
+    }
+    assert observations["no_unexplained_silent_interval"] is True
+
+
+@pytest.mark.unit
+def test_release_validation_parser_requires_explicit_mode_inputs() -> None:
+    args = live.parser().parse_args(
+        [
+            "--evidence",
+            "docs/evidence/live-release.json",
+            "--release-validation",
+            "--release-repo",
+            "example/private-scratch",
+            "--baseline-pre-pr-seconds",
+            "12.5",
+            "--baseline-pre-pr-seconds",
+            "13.5",
+        ]
+    )
+
+    assert args.release_validation is True
+    assert args.release_repo == "example/private-scratch"
+    assert args.baseline_pre_pr_seconds == [12.5, 13.5]
+
+
+@pytest.mark.unit
 def test_probe_evidence_must_be_a_new_json_file_in_docs_evidence() -> None:
     accepted = ROOT / "docs" / "evidence" / "__offline-unit-test-no-write__.json"
 

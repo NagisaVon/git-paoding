@@ -17,14 +17,33 @@ import re
 import secrets
 import shlex
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn, Sequence, cast
+
+from git_paoding.store.jsonstore import branch_key
+
+if __package__:
+    from scripts.field_shape import (
+        ATOM_COUNT,
+        CHANGED_FILE_COUNT,
+        DIRECTORY_COUNT,
+        build_field_shape,
+    )
+else:
+    from field_shape import (  # type: ignore[import-not-found,no-redef]
+        ATOM_COUNT,
+        CHANGED_FILE_COUNT,
+        DIRECTORY_COUNT,
+        build_field_shape,
+    )
 
 CANONICAL_BRANCH = "feature/live-publish-validation"
 SLICE_A = "review"
@@ -54,6 +73,11 @@ PRIVATE_SCRATCH_DESCRIPTION = (
 )
 _REPO_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _OPERATION_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_TRACE_PHASE_PATTERN = re.compile(r"^  ([a-z-]+): ([0-9]+(?:\.[0-9]+)?)s$")
+_TRACE_PROCESS_PATTERN = re.compile(
+    r"^  (git-local|git-remote|gh-read|gh-write): ([0-9]+) processes, "
+    r"([0-9]+(?:\.[0-9]+)?)s$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +85,14 @@ class CommandResult:
     stdout: str
     stderr: str
     returncode: int
+
+
+@dataclass(frozen=True, slots=True)
+class TimedCommandResult(CommandResult):
+    """Captured command output plus observation times for stderr lines."""
+
+    duration_seconds: float
+    stderr_events: tuple[tuple[float, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +151,119 @@ def run(
             f"{shlex.join(args)}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
         )
     return CommandResult(completed.stdout, completed.stderr, completed.returncode)
+
+
+def run_timed(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> TimedCommandResult:
+    """Capture both streams concurrently and timestamp each non-empty stderr line."""
+
+    print(f"$ {shlex.join(args)}", flush=True)
+    started = time.perf_counter()
+    process = subprocess.Popen(
+        args,
+        cwd=cwd,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,
+    )
+    require(process.stdout is not None and process.stderr is not None, "missing command pipe")
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    stderr_events: list[tuple[float, str]] = []
+    event_lock = threading.Lock()
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        stdout_lines.extend(process.stdout.readlines())
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        for line in process.stderr:
+            stderr_lines.append(line)
+            rendered = line.rstrip("\r\n")
+            if rendered:
+                with event_lock:
+                    stderr_events.append((time.perf_counter() - started, rendered))
+
+    readers = (
+        threading.Thread(target=read_stdout, daemon=True),
+        threading.Thread(target=read_stderr, daemon=True),
+    )
+    for reader in readers:
+        reader.start()
+    returncode = process.wait()
+    for reader in readers:
+        reader.join()
+    duration = time.perf_counter() - started
+    return TimedCommandResult(
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines),
+        returncode=returncode,
+        duration_seconds=duration,
+        stderr_events=tuple(stderr_events),
+    )
+
+
+def parse_publish_trace(stderr: str) -> tuple[dict[str, float], dict[str, int]]:
+    """Parse the CLI's stable aggregate trace without retaining command details."""
+
+    phases: dict[str, float] = {}
+    processes: dict[str, int] = {}
+    for line in stderr.splitlines():
+        phase_match = _TRACE_PHASE_PATTERN.fullmatch(line)
+        if phase_match:
+            phases[phase_match.group(1)] = float(phase_match.group(2))
+            continue
+        process_match = _TRACE_PROCESS_PATTERN.fullmatch(line)
+        if process_match:
+            processes[process_match.group(1)] = int(process_match.group(2))
+    return phases, processes
+
+
+def progress_observations(result: TimedCommandResult) -> dict[str, Any]:
+    """Summarize first-progress latency and gaps between visible progress events."""
+
+    progress_events = [
+        (seconds, line)
+        for seconds, line in result.stderr_events
+        if not line.startswith(("Trace:", "  ", "Publish complete in "))
+    ]
+    first_progress = next(
+        (
+            (seconds, line)
+            for seconds, line in progress_events
+            if line == "Reconciling canonical diff"
+        ),
+        None,
+    )
+    points = [(0.0, "command-start"), *progress_events, (result.duration_seconds, "command-end")]
+    gaps = [
+        {
+            "seconds": round(current[0] - previous[0], 6),
+            "after": previous[1],
+            "before": current[1],
+        }
+        for previous, current in zip(points, points[1:])
+    ]
+    longest = max(gaps, key=lambda item: cast(float, item["seconds"]))
+    return {
+        "first_progress_seconds": (
+            round(first_progress[0], 6) if first_progress is not None else None
+        ),
+        "first_progress_line": first_progress[1] if first_progress is not None else None,
+        "progress_event_count": len(progress_events),
+        "longest_silent_interval": longest,
+        "first_progress_within_one_second": (
+            first_progress is not None and first_progress[0] <= 1.0
+        ),
+        "no_unexplained_silent_interval": cast(float, longest["seconds"]) <= 5.0,
+    }
 
 
 def parse_json(result: CommandResult, *, context: str) -> Any:
@@ -538,6 +683,315 @@ class AtomicPushProbe:
             self._write_evidence()
         if failure is not None:
             raise failure
+
+
+class ReleaseValidation:
+    """Validate the field-shaped release flow in one owner-approved scratch repository."""
+
+    def __init__(
+        self,
+        source: Path,
+        evidence_path: Path,
+        repo_slug: str,
+        baseline_pre_pr_seconds: Sequence[float],
+    ) -> None:
+        self.source = source.resolve()
+        self.evidence_path = validate_probe_evidence_path(self.source, evidence_path)
+        self.repo_slug = validate_repo_slug(repo_slug)
+        self.remote_url = f"https://github.com/{self.repo_slug}.git"
+        self.baseline_pre_pr_seconds = tuple(baseline_pre_pr_seconds)
+        require(
+            all(value > 0 for value in self.baseline_pre_pr_seconds),
+            "pre-PR baseline samples must be positive",
+        )
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        self.base_branch = f"git-paoding-release-base-{timestamp}"
+        self.canonical_branch = f"git-paoding-release-field-{timestamp}"
+        self.work_root = Path(tempfile.mkdtemp(prefix="git-paoding-release-validation-"))
+        self.repo = self.work_root / "repo"
+        self.command_env = os.environ.copy()
+        self.command_env["GIT_TERMINAL_PROMPT"] = "0"
+        source_path = str(self.source / "src")
+        inherited_pythonpath = self.command_env.get("PYTHONPATH")
+        self.command_env["PYTHONPATH"] = (
+            f"{source_path}{os.pathsep}{inherited_pythonpath}"
+            if inherited_pythonpath
+            else source_path
+        )
+        self.evidence: dict[str, Any] = {
+            "evidence_version": 1,
+            "scenario": "v0.1.2 field-shaped publish and init-from-PR validation",
+            "started_at": utc_now(),
+            "scratch_repo": self.repo_slug,
+            "field_shape": {
+                "directories": DIRECTORY_COUNT,
+                "changed_files": CHANGED_FILE_COUNT,
+                "atoms": ATOM_COUNT,
+                "slices": 7,
+            },
+            "atomic_push_evidence": "docs/evidence/atomic-push-github-2026-08-31.json",
+            "fallback_constant_remains_off": True,
+            "generated_refs": [
+                f"refs/heads/paoding/{branch_key(self.canonical_branch)}/slice-{index}/{side}"
+                for index in range(1, 8)
+                for side in ("base", "head")
+            ],
+        }
+
+    def git(self, *args: str, expected: int | tuple[int, ...] = 0) -> CommandResult:
+        return run(["git", *args], cwd=self.repo, expected=expected, env=self.command_env)
+
+    def gh_source(self, *args: str) -> CommandResult:
+        return run(["gh", *args], cwd=self.source, env=self.command_env)
+
+    def _paoding_command(self, *args: str) -> list[str]:
+        return [
+            sys.executable,
+            "-c",
+            "from git_paoding.cli.main import main; main()",
+            "--",
+            *args,
+        ]
+
+    def paoding(self, *args: str, expected: int | tuple[int, ...] = 0) -> CommandResult:
+        return run(
+            self._paoding_command(*args),
+            cwd=self.repo,
+            expected=expected,
+            env=self.command_env,
+        )
+
+    def paoding_timed(self, *args: str) -> TimedCommandResult:
+        result = run_timed(
+            self._paoding_command(*args),
+            cwd=self.repo,
+            env=self.command_env,
+        )
+        if result.returncode != 0:
+            fail(
+                f"timed git-paoding command exited {result.returncode}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        return result
+
+    def _validate_target(self) -> None:
+        payload = parse_json(
+            self.gh_source(
+                "repo",
+                "view",
+                self.repo_slug,
+                "--json",
+                "nameWithOwner,visibility,isArchived,description",
+            ),
+            context="gh repo view release-validation target",
+        )
+        validate_private_scratch_target(payload, expected_slug=self.repo_slug)
+
+    def _materialize(self, state: dict[str, str]) -> None:
+        for relative_path, content in state.items():
+            destination = self.repo / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding="utf-8")
+
+    def _seed_field_shape(self) -> None:
+        shape = build_field_shape()
+        self.repo.mkdir()
+        self.git("init", "--quiet", f"--initial-branch={self.base_branch}")
+        self.git("config", "user.name", "git-paoding release validation")
+        self.git("config", "user.email", "git-paoding@localhost")
+        self.git("remote", "add", "origin", self.remote_url)
+        self._materialize(shape.base)
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "Field-shaped validation base")
+        self.git("push", "--quiet", "--set-upstream", "origin", self.base_branch)
+        self.git("switch", "--quiet", "-c", self.canonical_branch)
+        self._materialize(shape.final)
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "Field-shaped validation final")
+        self.git("push", "--quiet", "--set-upstream", "origin", self.canonical_branch)
+        self.evidence["base_branch"] = self.base_branch
+        self.evidence["canonical_branch"] = self.canonical_branch
+        self.evidence["base_oid"] = self.git(
+            "rev-parse", f"{self.base_branch}^{{commit}}"
+        ).stdout.strip()
+        self.evidence["final_oid"] = self.git("rev-parse", "HEAD^{commit}").stdout.strip()
+
+    def _create_integration_pr_and_init(self) -> None:
+        created = self.gh_source(
+            "pr",
+            "create",
+            "--repo",
+            self.repo_slug,
+            "--draft",
+            "--base",
+            self.base_branch,
+            "--head",
+            self.canonical_branch,
+            "--title",
+            "git-paoding v0.1.2 field-shaped validation",
+            "--body",
+            "Owner-authorized scratch integration PR for git-paoding release validation.",
+        )
+        pr_url = created.stdout.strip()
+        require(
+            pr_url.startswith(f"https://github.com/{self.repo_slug}/pull/"), "unexpected PR URL"
+        )
+        init_result = self.paoding("init", "--pr", pr_url)
+        self.evidence["init_pr_smoke"] = {
+            "pr_url": pr_url,
+            "exit_code": init_result.returncode,
+            "open_pr": True,
+            "passed": True,
+        }
+
+    def _configure_slices(self) -> None:
+        shape = build_field_shape()
+        for slice_id in shape.slice_paths:
+            self.paoding("slice", "add", slice_id, "--title", f"Field review {slice_id}")
+        assignment_path = self.work_root / "assignments.json"
+        assignment_path.write_text(
+            json.dumps(
+                {
+                    "contract_version": 0,
+                    "assignments": {
+                        slice_id: list(paths) for slice_id, paths in shape.slice_paths.items()
+                    },
+                    "force": False,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.paoding("assign", "--batch", str(assignment_path), "--quiet", "--json")
+        status = cast(
+            dict[str, Any],
+            parse_json(
+                self.paoding("status", "--summary", "--json"),
+                context="field-shaped status summary",
+            ),
+        )
+        require(status["total_atom_count"] == ATOM_COUNT, "field-shaped atom count changed")
+        require(status["unassigned_count"] == 0, "field-shaped assignments are incomplete")
+
+    def _pr_snapshot_hash(self) -> str:
+        payload = parse_json(
+            self.gh_source(
+                "pr",
+                "list",
+                "--repo",
+                self.repo_slug,
+                "--state",
+                "open",
+                "--limit",
+                "100",
+                "--json",
+                "number,updatedAt,title,body,headRefOid,baseRefOid",
+            ),
+            context="open PR snapshot",
+        )
+        return sha256_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+    def _publish_record(self, result: TimedCommandResult) -> dict[str, Any]:
+        payload = cast(dict[str, Any], json.loads(result.stdout))
+        phases, processes = parse_publish_trace(result.stderr)
+        require(len(phases) == 8, "publish trace did not report all eight phases")
+        require(
+            set(processes) == {"git-local", "git-remote", "gh-read", "gh-write"},
+            "publish trace process categories are incomplete",
+        )
+        pre_pr_phases = (
+            "reconcile",
+            "validate-github",
+            "load-context",
+            "build-projection",
+            "sync-refs",
+        )
+        return {
+            "duration_seconds": round(result.duration_seconds, 6),
+            "phase_seconds": phases,
+            "process_counts": processes,
+            "pre_pr_preparation_seconds": round(sum(phases[name] for name in pre_pr_phases), 6),
+            "progress": progress_observations(result),
+            "publish_payload": payload,
+        }
+
+    def _write_evidence(self) -> None:
+        self.evidence["completed_at"] = utc_now()
+        self.evidence["scratch_repo_retention"] = "preserved for owner audit"
+        self.evidence_path.write_text(
+            json.dumps(self.evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Evidence: {self.evidence_path}")
+
+    def execute(self) -> None:
+        for executable in ("git", "gh"):
+            require(
+                shutil.which(executable) is not None, f"missing required executable: {executable}"
+            )
+        self._validate_target()
+        self._seed_field_shape()
+        self._create_integration_pr_and_init()
+        self._configure_slices()
+
+        first = self._publish_record(
+            self.paoding_timed("publish", "--json", "--trace", "--network-timeout", "120")
+        )
+        first_payload = cast(dict[str, Any], first["publish_payload"])
+        require(first_payload["action_needed"] is False, "first field publish needs action")
+        require(
+            all(item["outcome"] == "created" for item in first_payload["slices"]),
+            "first field publish did not create every slice PR",
+        )
+        before_no_op = self._pr_snapshot_hash()
+        no_op = self._publish_record(
+            self.paoding_timed("publish", "--json", "--trace", "--network-timeout", "120")
+        )
+        after_no_op = self._pr_snapshot_hash()
+        no_op_payload = cast(dict[str, Any], no_op["publish_payload"])
+        no_op_processes = cast(dict[str, int], no_op["process_counts"])
+        require(
+            all(item["outcome"] == "no-op" for item in no_op_payload["slices"]),
+            "unchanged field republish was not a full no-op",
+        )
+        require(no_op_processes["git-remote"] == 1, "no-op republish performed a push")
+        require(no_op_processes["gh-write"] == 0, "no-op republish edited a PR")
+        require(before_no_op == after_no_op, "no-op republish changed an open PR snapshot")
+        no_op["zero_pushes"] = True
+        no_op["zero_pr_edits"] = True
+        no_op["pr_snapshot_sha256_before"] = before_no_op
+        no_op["pr_snapshot_sha256_after"] = after_no_op
+
+        current_samples = [cast(float, first["pre_pr_preparation_seconds"])]
+        baseline_median = (
+            statistics.median(self.baseline_pre_pr_seconds)
+            if self.baseline_pre_pr_seconds
+            else None
+        )
+        current_median = statistics.median(current_samples)
+        reduction = baseline_median / current_median if baseline_median is not None else None
+        reduction_target = reduction >= 3.0 if reduction is not None else None
+        self.evidence["field_publish"] = first
+        self.evidence["no_op_republish"] = no_op
+        self.evidence["pre_pr_preparation"] = {
+            "baseline_samples_seconds": list(self.baseline_pre_pr_seconds),
+            "baseline_median_seconds": baseline_median,
+            "current_samples_seconds": current_samples,
+            "current_median_seconds": current_median,
+            "reduction_factor": reduction,
+            "target_at_least_3x": reduction_target,
+            "target_is_non_blocking": True,
+        }
+        progress = cast(dict[str, Any], first["progress"])
+        self.evidence["live_targets"] = {
+            "first_progress_within_one_second": progress["first_progress_within_one_second"],
+            "pre_pr_preparation_at_least_3x_faster": reduction_target,
+            "no_unexplained_silent_interval": progress["no_unexplained_silent_interval"],
+            "targets_are_non_blocking": True,
+        }
+        self._write_evidence()
 
 
 class Scenario:
@@ -1114,12 +1568,34 @@ def parser() -> argparse.ArgumentParser:
         "--probe-repo",
         help="existing private live-validation scratch repository as OWNER/NAME",
     )
+    result.add_argument(
+        "--release-validation",
+        action="store_true",
+        help="run the field-shaped release validation against an existing scratch repository",
+    )
+    result.add_argument(
+        "--release-repo",
+        help="owner-authorized existing private scratch repository as OWNER/NAME",
+    )
+    result.add_argument(
+        "--baseline-pre-pr-seconds",
+        action="append",
+        type=float,
+        default=[],
+        help="repeat for historical pre-PR preparation samples used by the non-blocking target",
+    )
     return result
 
 
 def main() -> int:
     args = parser().parse_args()
-    scenario: Scenario | AtomicPushProbe | None = None
+    scenario: Scenario | AtomicPushProbe | ReleaseValidation | None = None
+    if args.atomic_push_probe and args.release_validation:
+        print(
+            "LIVE VALIDATION FAILED: choose either --atomic-push-probe or --release-validation",
+            file=sys.stderr,
+        )
+        return 1
     if args.atomic_push_probe:
         if not args.probe_repo:
             print(
@@ -1132,10 +1608,31 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-    else:
-        if args.probe_repo:
+        if args.release_repo or args.baseline_pre_pr_seconds:
             print(
-                "LIVE VALIDATION FAILED: --probe-repo requires --atomic-push-probe", file=sys.stderr
+                "LIVE VALIDATION FAILED: release options require --release-validation",
+                file=sys.stderr,
+            )
+            return 1
+    elif args.release_validation:
+        if not args.release_repo:
+            print(
+                "LIVE VALIDATION FAILED: --release-validation requires --release-repo",
+                file=sys.stderr,
+            )
+            return 1
+        if args.probe_repo or args.repo_name:
+            print(
+                "LIVE VALIDATION FAILED: probe and repository-creation options cannot be used "
+                "with --release-validation",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        if args.probe_repo or args.release_repo or args.baseline_pre_pr_seconds:
+            print(
+                "LIVE VALIDATION FAILED: mode-specific options require their validation mode",
+                file=sys.stderr,
             )
             return 1
     try:
@@ -1144,6 +1641,13 @@ def main() -> int:
                 args.source,
                 args.evidence,
                 args.probe_repo,
+            )
+        elif args.release_validation:
+            scenario = ReleaseValidation(
+                args.source,
+                args.evidence,
+                args.release_repo,
+                args.baseline_pre_pr_seconds,
             )
         else:
             scenario = Scenario(args.source, args.evidence, args.repo_name)

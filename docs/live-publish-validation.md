@@ -70,3 +70,49 @@ status. Commands, credentials, raw remote URLs, stdout, and stderr are not persi
 
 A fully successful probe supports keeping the atomic-push fallback disabled. The probe records
 that conclusion but never changes the fallback constant itself.
+
+## v0.1.2 release validation
+
+The release mode is separate from the historical five-stage workflow and never creates or
+selects a repository on its own. Run it only after the owner authorizes one exact existing
+private scratch repository. The repository must be unarchived and retain the scratch description
+shown above. The mode refuses any other target and requires a new JSON evidence path directly
+under `docs/evidence/`.
+
+The owner-approved command is:
+
+```bash
+PYTHONPATH=src /Users/chang/Documents/git-paoding/.venv/bin/python \
+  scripts/live_publish_validation.py \
+  --release-validation \
+  --release-repo OWNER/NAME \
+  --baseline-pre-pr-seconds PREVIOUS_SAMPLE_1 \
+  --baseline-pre-pr-seconds PREVIOUS_SAMPLE_2 \
+  --baseline-pre-pr-seconds PREVIOUS_SAMPLE_3 \
+  --evidence docs/evidence/live-release-v0.1.2-2026-08-31.json
+```
+
+Replace every placeholder with an owner-reviewed value before authorization. Baseline samples
+are optional historical measurements; repeat the option for each comparable sample. Without
+them, the evidence records the current preparation median but leaves the non-blocking 3× target
+unevaluated.
+
+The command validates the exact target with a read-only `gh repo view`, then writes only within
+that scratch repository: two unique validation branches, one real Draft integration PR, fourteen
+generated projection refs, seven Draft slice PRs, and the integration PR's managed slice index.
+It exercises `init --pr` against that open integration PR, publishes the 315-directory,
+33-changed-file, 36-atom, seven-slice field shape, and performs an unchanged republish. The
+republish must report seven no-op outcomes, exactly one Git remote process (the required
+`ls-remote`, therefore no push), zero GitHub writes, and an unchanged hash of all open PR
+snapshots.
+
+The evidence records first-progress latency, all eight phase timings, aggregate subprocess
+counts, the longest interval between visible progress events, the pre-PR preparation median and
+optional reduction factor, the `init --pr` URL/result, and no-op ref/PR checks. The one-second,
+3×, and silent-interval observations are non-blocking targets; missing no-op guarantees or an
+incomplete trace fail the run. The scratch branches and PRs are preserved for owner audit.
+
+The atomic capability result is already recorded in
+`docs/evidence/atomic-push-github-2026-08-31.json`: GitHub accepted the two-ref atomic exact-lease
+update, cleanup left no probe refs, and the per-slice fallback remains disabled. Do not overwrite
+or rerun that evidence as part of the release validation.
