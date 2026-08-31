@@ -229,13 +229,13 @@ Maintainers can exercise the documented CLI in an isolated local repository
 with a bare Git remote and a fake GitHub CLI backend:
 
 ```bash
-python3 docs/smoke_doc_commands.py
+uv run --no-sync python docs/smoke_doc_commands.py
 ```
 
 The release gate explicitly requires the complete integrated command surface:
 
 ```bash
-PAODING_REQUIRE_FINAL_CLI=1 python3 docs/smoke_doc_commands.py
+PAODING_REQUIRE_FINAL_CLI=1 uv run --no-sync python docs/smoke_doc_commands.py
 ```
 
 The smoke reuses the Python interpreter that launched it, so its child CLI has

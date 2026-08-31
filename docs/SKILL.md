@@ -204,12 +204,12 @@ integration PR is still open or merely closed.
 From the `git-paoding` repository, run the isolated documentation smoke:
 
 ```bash
-python3 docs/smoke_doc_commands.py
+uv run --no-sync python docs/smoke_doc_commands.py
 ```
 
 Run the strict release gate to require batch, `--force`, focus, slice lifecycle,
 and archive commands:
 
 ```bash
-PAODING_REQUIRE_FINAL_CLI=1 python3 docs/smoke_doc_commands.py
+PAODING_REQUIRE_FINAL_CLI=1 uv run --no-sync python docs/smoke_doc_commands.py
 ```
