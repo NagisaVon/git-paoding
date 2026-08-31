@@ -162,25 +162,34 @@ def test_happy_path_second_publish_is_full_no_op(
 
     import git_paoding.gitio.refs as refs_module
 
-    original_force_push = refs_module._force_push
-    pushed_refs: list[str] = []
+    original_atomic_push = refs_module._push_atomic_ref_updates
+    pushed_batches: list[tuple[str, ...]] = []
 
-    def record_force_push(
+    def record_atomic_push(
         repo: Path,
         remote: str,
-        ref: str,
         *,
+        desired: dict[str, str],
+        observed: dict[str, str],
+        changed: tuple[str, ...],
         timeout: float | None = None,
     ) -> None:
-        pushed_refs.append(ref)
-        original_force_push(repo, remote, ref, timeout=timeout)
+        pushed_batches.append(changed)
+        original_atomic_push(
+            repo,
+            remote,
+            desired=desired,
+            observed=observed,
+            changed=changed,
+            timeout=timeout,
+        )
 
-    monkeypatch.setattr(refs_module, "_force_push", record_force_push)
+    monkeypatch.setattr(refs_module, "_push_atomic_ref_updates", record_atomic_push)
 
     first = publish(scratch.path, backend=fake_backend)
 
     refs = generated_refs(branch_key("main"), "review")
-    assert pushed_refs == [refs.base, refs.head]
+    assert pushed_batches == [(refs.base, refs.head)]
     assert first.action_needed is False
     assert [item.outcome for item in first.slices] == [PublishOutcome.CREATED]
     assert first.integration_pr is not None
@@ -209,14 +218,14 @@ def test_happy_path_second_publish_is_full_no_op(
     advertised_before = ls_remote(scratch.path, "origin", refs.base, refs.head)
     creates_before = list(fake_backend.creates)
     updates_before = list(fake_backend.updates)
-    pushed_refs.clear()
+    pushed_batches.clear()
 
     second = publish(scratch.path, backend=fake_backend)
 
     assert [item.outcome for item in second.slices] == [PublishOutcome.NO_OP]
     assert second.integration_pr == first.integration_pr
     assert second.slices[0].pr_number == slice_pr_number
-    assert pushed_refs == []
+    assert pushed_batches == []
     assert fake_backend.creates == creates_before
     assert fake_backend.updates == updates_before
     assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
