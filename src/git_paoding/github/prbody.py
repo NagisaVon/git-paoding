@@ -195,7 +195,7 @@ def rewrite_slice_body(
     related_slices: Sequence[RelatedSliceLink] = (),
     currently_empty: bool = False,
 ) -> str:
-    """Refresh slice machine metadata without touching narrative text."""
+    """Replace machine-owned slice metadata while preserving author narrative."""
 
     return rewrite_machine_region(
         body,

@@ -29,8 +29,9 @@ throughout.
 - Let `publish` manage generated refs and stable PR identities. Do not manually
   force-push projections or close and recreate a slice PR merely to refresh it.
 - Never merge a slice PR. It is a Draft PR marked **DO NOT MERGE — review
-  projection only**. Authoritative CI, approval, branch protection, and merge
-  belong to the integration PR.
+  projection only**.
+- Keep authoritative CI, approval, branch protection, and merge on the
+  integration PR.
 - Do not require slice-level CI or independent buildability. Cross-slice
   dependencies are valid.
 - New PR bodies contain no narrative template. Preserve human-written PR
@@ -45,11 +46,11 @@ ritual.
 When review concerns are already apparent, use them as provisional,
 low-frequency structure guidance:
 
-- prefer one primary review concern per new module or test file when that is a
-  natural boundary;
-- separate meaningfully different test concerns when ordinary readable
-  organization permits; and
-- avoid one large contiguous insertion that mixes unrelated concerns when a
+- Prefer one primary review concern per new module or test file when that is a
+  natural boundary.
+- Separate meaningfully different test concerns when ordinary readable
+  organization permits.
+- Avoid one large contiguous insertion that mixes unrelated concerns when a
   natural separation already exists.
 
 This is optional guidance, not a correctness precondition. Do not create
@@ -91,7 +92,7 @@ target; do not silently change it later.
 git-paoding status --json
 ```
 
-Interpret exit code `2` as **action needed**, not an operational failure. Read
+Interpret exit code `2` as action needed, not an operational failure. Read
 the versioned JSON atom list. Use atom IDs for precise selection; paths,
 directories, globs, and Final-coordinate ranges select broader atom sets.
 
@@ -184,8 +185,9 @@ the targeted task ends so unrelated later work does not default to that slice.
   degradation, not corruption.
 - If local session metadata is lost, do not edit generated refs or PR bodies to
   reconstruct it. Reinitialize with the original pinned base and recreate the
-  same stable slice IDs. All atom attribution returns as unassigned; a clean
-  publish can adopt existing open slice PRs through their machine markers.
+  same stable slice IDs.
+- Expect all atom attribution to return as unassigned after reinitialization. A
+  clean publish can adopt existing open slice PRs through their machine markers.
 - If a slice becomes empty, publication may leave its existing Draft PR open and
   mark it empty; do not invent changes merely to keep the projection nonempty.
 

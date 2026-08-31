@@ -1,7 +1,7 @@
-"""Idempotent publication and archive orchestration.
+"""Remote synchronization for semantic review sessions.
 
-Ref pushes and pull-request mutations happen only in this module; every other
-core module stays local.
+The functions here own generated ref updates and GitHub pull-request mutations.
+All other core modules operate without remote side effects.
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ class SelectorError(PaodingError):
 
 
 class SelectorNotFoundError(SelectorError):
-    """Raised when a selector matches no current atom."""
+    """An input could not be resolved to any atom in the current diff."""
 
 
 class SelectorConflictError(SelectorError):

@@ -173,7 +173,7 @@ def assign(
     canonical_branch: str | None = None,
     force: bool = False,
 ) -> AssignResult:
-    """Assign current atoms with exact-id or broad-selector safety semantics."""
+    """Resolve selectors against the current diff and persist their slice ownership."""
 
     repository = repo.resolve()
     branch = _canonical_branch(repository, canonical_branch)

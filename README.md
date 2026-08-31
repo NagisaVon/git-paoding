@@ -6,11 +6,11 @@
 > release review. Release-install commands remain provisional until the package
 > is published.
 
-**Agent writes globally. Humans review locally.**
+Agent writes globally. Humans review locally.
 
 `git-paoding` lets a coding agent keep one coherent implementation on one
 canonical integration branch while presenting the final change as several small,
-semantic Draft GitHub pull requests. Those **slice PRs** are review projections:
+semantic Draft GitHub pull requests. Those slice PRs are review projections:
 they help people understand one concern at a time, but they are not development
 branches or merge targets.
 
@@ -27,13 +27,13 @@ natural joints.
 The package is preparing for its first release. The CLI supports the complete
 review lifecycle:
 
-- initialize a session with a pinned base;
-- add, list, rename, and remove stable slice identities;
-- inspect the current `Base -> Final` diff as atoms;
-- assign atoms by ID, path, directory, glob, or Final line range;
-- batch assignments and use an optional slice focus;
-- publish or refresh Draft slice PRs and the Draft integration PR; and
-- archive slice PRs and generated refs after the integration PR merges.
+- Initialize a session with a pinned base.
+- Add, list, rename, and remove stable slice identities.
+- Inspect the current `Base -> Final` diff as atoms.
+- Assign atoms by ID, path, directory, glob, or Final line range.
+- Batch assignments and use an optional slice focus.
+- Publish or refresh Draft slice PRs and the Draft integration PR.
+- Archive slice PRs and generated refs after the integration PR merges.
 
 ## Requirements and installation
 
@@ -56,7 +56,7 @@ uv sync --extra dev --locked
 uv run git-paoding --help
 ```
 
-The following release-install commands are a **release draft** until the package
+The following release-install commands are a release draft until the package
 is published. They must be re-run during the release review:
 
 ```bash
@@ -167,10 +167,10 @@ itself.
 Every slice PR is Draft and carries a
 **DO NOT MERGE — review projection only** warning because:
 
-- its generated base and head refs are disposable projections;
-- it is not the branch where implementation work happens;
-- its review is for comprehension, not authoritative approval; and
-- only the integration PR represents the complete change and real merge target.
+- Its generated base and head refs are disposable projections.
+- It is not the branch where implementation work happens.
+- Its review is for comprehension, not authoritative approval.
+- Only the integration PR represents the complete change and real merge target.
 
 Use normal GitHub review features on a slice PR: read its narrative, inspect
 Files changed, and leave inline comments. After feedback, the author updates the
@@ -208,10 +208,10 @@ PR.
 - Unassigned or ambiguous atoms are normal recovery states, not metadata
   corruption. Rerun `status`, classify what remains, and publish again.
 - Slice metadata lives in the repository's common Git directory and is not
-  committed. Do not delete it as a routine reset. If it is lost, recreate the
-  session and the same stable slice IDs; attribution returns as unassigned,
-  while existing open slice PRs can be adopted by their machine markers on the
-  next clean publish.
+  committed. Do not delete it as a routine reset.
+- If session metadata is lost, recreate the session and the same stable slice
+  IDs. Attribution returns as unassigned, while existing open slice PRs can be
+  adopted by their machine markers on the next clean publish.
 - New PR bodies contain only their machine-managed region; the tool does not
   seed a narrative template. Human narrative added outside those delimiters is
   preserved byte-for-byte on refresh.

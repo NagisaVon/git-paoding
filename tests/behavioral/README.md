@@ -1,8 +1,8 @@
 # Behavioral contract matrix
 
-This directory is the CI-discoverable traceability suite for the twelve product
-properties. Every row maps to one test whose name remains stable so a future
-change cannot make coverage disappear behind a broad integration test.
+The CI-discoverable traceability suite in this directory covers the twelve
+product properties. Every row maps to one test whose name remains stable so a
+future change cannot make coverage disappear behind a broad integration test.
 
 | Property | Named coverage | Primary assertion |
 |---|---|---|
