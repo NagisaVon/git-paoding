@@ -18,17 +18,6 @@ projections without creating a branch stack to restack.
 The name comes from 庖丁解牛 (_Chef Ding carves the ox_): cutting along the
 natural joints.
 
-## Status
-
-The CLI supports the complete review lifecycle:
-
-- Initialize a session with a pinned base.
-- Add, list, rename, and remove stable slice identities.
-- Inspect the current `Base -> Final` diff as atoms.
-- Assign atoms by ID, path, directory, glob, or Final line range.
-- Batch assignments and use an optional slice focus.
-- Publish or refresh Draft slice PRs and the Draft integration PR.
-- Archive slice PRs and generated refs after the integration PR merges.
 
 ## Install the CLI and agent workflow
 
