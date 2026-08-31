@@ -9,6 +9,7 @@ import click
 
 from git_paoding import __version__
 from git_paoding.agent_install import AgentInstallError, install_agent_skill
+from git_paoding.api import strip_previews
 from git_paoding.cli.facade import ApiFacade, CliFacade
 from git_paoding.cli.render import (
     render_archive,
@@ -22,8 +23,11 @@ from git_paoding.cli.render import (
     render_slice_removed,
     render_slice_renamed,
     render_status,
+    render_status_atoms_view,
+    render_status_paths,
+    render_status_summary,
 )
-from git_paoding.core.model import AssignBatchRequest, PaodingError
+from git_paoding.core.model import AssignBatchRequest, PaodingError, StatusView
 from git_paoding.core.progress import ProgressEvent, PublishPhase
 from git_paoding.github.gh_cli import GhCliBackend
 from git_paoding.gitio.runner import GitError
@@ -210,15 +214,74 @@ def slice_rename_command(slice_id: str, title: str) -> None:
     is_flag=True,
     help="Show complete changed-hunk previews (default: 3 changed lines).",
 )
-def status_command(as_json: bool, full: bool) -> None:
+@click.option("--summary", "summary_view", is_flag=True, help="Show global counts only.")
+@click.option("--paths", "paths_view", is_flag=True, help="Show preview-free per-path totals.")
+@click.option(
+    "--path",
+    "path_filters",
+    multiple=True,
+    metavar="PATH",
+    help="Show atoms for an exact path; repeat for multiple paths.",
+)
+@click.option(
+    "--action-needed-only",
+    is_flag=True,
+    help="Show only paths or atoms with unresolved attribution.",
+)
+def status_command(
+    as_json: bool,
+    full: bool,
+    summary_view: bool,
+    paths_view: bool,
+    path_filters: tuple[str, ...],
+    action_needed_only: bool,
+) -> None:
     """Reconcile and report local attribution status."""
 
+    if summary_view and paths_view:
+        raise click.UsageError("--summary and --paths are mutually exclusive")
+    if path_filters and (summary_view or paths_view):
+        raise click.UsageError("--path cannot be combined with --summary or --paths")
+    if full and (summary_view or paths_view):
+        raise click.UsageError("--full is only available for atom views")
+
     try:
-        result = _facade.get_status(Path.cwd(), full=full)
+        if not summary_view and not paths_view and not path_filters and not action_needed_only:
+            default_result = _facade.get_status(Path.cwd(), full=full)
+            output = (
+                default_result.model_dump_json(indent=2)
+                if as_json
+                else render_status(default_result, full=full)
+            )
+            action_needed = bool(default_result.unassigned_count or default_result.ambiguous_count)
+        else:
+            view = (
+                StatusView.SUMMARY
+                if summary_view
+                else StatusView.PATHS
+                if paths_view
+                else StatusView.ATOMS
+            )
+            view_result = _facade.get_status_view(
+                Path.cwd(),
+                view=view,
+                paths=path_filters,
+                action_needed_only=action_needed_only,
+                full=full,
+            )
+            if as_json:
+                output = view_result.model_dump_json(indent=2)
+            elif view is StatusView.SUMMARY:
+                output = render_status_summary(view_result)
+            elif view is StatusView.PATHS:
+                output = render_status_paths(view_result)
+            else:
+                output = render_status_atoms_view(view_result, full=full)
+            action_needed = bool(view_result.unassigned_count or view_result.ambiguous_count)
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
-    click.echo(result.model_dump_json(indent=2) if as_json else render_status(result, full=full))
-    if result.unassigned_count or result.ambiguous_count:
+    click.echo(output)
+    if action_needed:
         raise click.exceptions.Exit(2)
 
 
@@ -235,11 +298,15 @@ def status_command(as_json: bool, full: bool) -> None:
     type=click.Path(exists=True, dir_okay=False, allow_dash=True, path_type=Path),
     help="Read the versioned batch JSON contract from a file, or '-' for stdin.",
 )
+@click.option("--quiet", is_flag=True, help="Show assignment counts without atom previews.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the versioned JSON contract.")
 def assign_command(
     slice_id: str | None,
     selectors: tuple[str, ...],
     force: bool,
     batch: Path | None,
+    quiet: bool,
+    as_json: bool,
 ) -> None:
     """Assign atoms using ids, paths, directories/globs, or Final line ranges."""
 
@@ -260,7 +327,13 @@ def assign_command(
             result = _facade.assign(Path.cwd(), slice_id, selectors, force=force)
     except (PaodingError, GitError, ValueError, OSError) as error:
         _raise_cli_error(error)
-    click.echo(render_assign(result))
+    if as_json:
+        json_result = strip_previews(result) if quiet else result
+        click.echo(json_result.model_dump_json(indent=2))
+    elif quiet:
+        click.echo(f"Assigned: {len(result.assigned)}  Skipped: {len(result.skipped)}")
+    else:
+        click.echo(render_assign(result))
 
 
 @main.command("focus")

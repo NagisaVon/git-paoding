@@ -28,6 +28,8 @@ from git_paoding.core.model import (
     SliceStatus,
     SliceSummary,
     StatusResult,
+    StatusView,
+    StatusViewResult,
 )
 from git_paoding.core.progress import ProgressEvent, PublishPhase
 from git_paoding.core.selectors import assign_batch_selectors
@@ -97,6 +99,128 @@ def test_clean_status_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0
     assert "Action needed: 0 unassigned, 0 ambiguous" in result.output
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["status", "--summary", "--paths"],
+        ["status", "--summary", "--path", "src/app.py"],
+        ["status", "--paths", "--path", "src/app.py"],
+        ["status", "--summary", "--full"],
+        ["status", "--paths", "--full"],
+    ],
+)
+def test_status_rejects_invalid_view_combinations_before_facade_access(
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_main,
+        "_facade",
+        SimpleNamespace(
+            get_status=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("facade must not be called")
+            ),
+            get_status_view=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("facade must not be called")
+            ),
+        ),
+    )
+
+    result = CliRunner().invoke(cli_main.main, arguments)
+
+    assert result.exit_code == 2
+    assert "Error:" in result.output
+
+
+@pytest.mark.unit
+def test_empty_filtered_status_still_exits_two_from_global_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filtered = StatusViewResult(
+        view=StatusView.ATOMS,
+        session=_status().session,
+        total_atom_count=1,
+        unassigned_count=1,
+        ambiguous_count=0,
+        returned_atom_count=0,
+        path_filters=["missing.py"],
+        atoms=[],
+    )
+
+    def fake_view(
+        repo: Path,
+        *,
+        view: StatusView,
+        paths: Sequence[str],
+        action_needed_only: bool,
+        full: bool,
+    ) -> StatusViewResult:
+        assert view is StatusView.ATOMS
+        assert tuple(paths) == ("missing.py",)
+        assert action_needed_only is False
+        assert full is False
+        return filtered
+
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(get_status_view=fake_view))
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["status", "--path", "missing.py", "--json"],
+    )
+
+    assert result.exit_code == 2
+    assert StatusViewResult.model_validate_json(result.output) == filtered
+
+
+@pytest.mark.unit
+def test_default_status_cli_output_matches_existing_golden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = StatusResult(
+        session=SessionSummary(
+            canonical_branch="feature/review",
+            base_oid="1" * 40,
+            last_final_oid="2" * 40,
+        ),
+        slices=[
+            SliceSummary(
+                id="review",
+                title="Review behavior",
+                status=SliceStatus.ACTIVE,
+            )
+        ],
+        atoms=[
+            Atom(
+                atom_id="a1b2c3d4",
+                path="scenario.txt",
+                kind=AtomKind.MODIFY,
+                base_start=2,
+                base_len=1,
+                final_start=2,
+                final_len=1,
+                content_hash="3" * 64,
+                state=AtomState.UNASSIGNED,
+                preview="-base\n+final",
+            )
+        ],
+        unassigned_count=1,
+    )
+    monkeypatch.setattr(
+        cli_main,
+        "_facade",
+        SimpleNamespace(get_status=lambda repo, full: status),
+    )
+
+    result = CliRunner().invoke(cli_main.main, ["status"])
+    golden = (Path(__file__).parents[1] / "golden" / "cli" / "status.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert result.exit_code == 2
+    assert result.output == golden
 
 
 @pytest.mark.unit
@@ -444,6 +568,9 @@ def test_publish_action_needed_exits_two_in_both_rendering_modes(
     else:
         assert "Publish stopped before remote effects." in result.output
         assert "Action needed: 1 unassigned, 0 ambiguous" in result.output
+        assert "Run `git-paoding status --paths --action-needed-only`" in result.output
+        assert "Action-needed atoms:" not in result.output
+        assert "a1  unassigned" not in result.output
 
 
 @pytest.mark.unit
