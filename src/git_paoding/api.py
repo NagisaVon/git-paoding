@@ -18,8 +18,10 @@ from git_paoding.core.model import (
     PRState,
     PublishResult,
     PullRequestTarget,
+    ReplaceResult,
     Session,
     SessionAlreadyExistsError,
+    SessionNotFoundError,
     Slice,
     SliceStatus,
     SourcePullRequest,
@@ -37,7 +39,7 @@ from git_paoding.github.backend import GitHubBackend
 from git_paoding.gitio import plumbing
 from git_paoding.gitio.plumbing import rev_parse
 from git_paoding.gitio.runner import GitCommandError, run_git
-from git_paoding.store.jsonstore import JsonSessionStore
+from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 from git_paoding.store.lock import SessionLock
 
 
@@ -63,6 +65,10 @@ class SliceNotFoundError(PaodingError):
 
 class SessionArchivedError(PaodingError):
     """Raised when a local mutation targets a completed review session."""
+
+
+class SessionReplacementError(PaodingError):
+    """Raised when publication evidence makes session replacement unsafe."""
 
 
 def _require_open_session(session: Session) -> None:
@@ -136,17 +142,34 @@ def init_session(
         )
     repository = repo.resolve()
     branch = _canonical_branch(repository, canonical_branch)
-    _validated_base_branch(repository, base)
-    base_oid = rev_parse(repository, f"{base}^{{commit}}")
-    # Verify the canonical branch ref independently of the current checkout.
-    rev_parse(repository, f"refs/heads/{branch}^{{commit}}")
-    session = Session(
+    session = _build_local_session(
+        repository,
+        base=base,
         canonical_branch=branch,
+        slice_pr_prefix=slice_pr_prefix,
+    )
+    return _create_session(repository, session)
+
+
+def _build_local_session(
+    repo: Path,
+    *,
+    base: str,
+    canonical_branch: str,
+    slice_pr_prefix: str,
+) -> Session:
+    """Validate local initialization inputs and return an unpersisted session."""
+
+    _validated_base_branch(repo, base)
+    base_oid = rev_parse(repo, f"{base}^{{commit}}")
+    # Verify the canonical branch ref independently of the current checkout.
+    rev_parse(repo, f"refs/heads/{canonical_branch}^{{commit}}")
+    return Session(
+        canonical_branch=canonical_branch,
         base_ref=base,
         base_oid=base_oid,
         slice_pr_prefix=slice_pr_prefix,
     )
-    return _create_session(repository, session)
 
 
 def _create_session(repo: Path, session: Session) -> StatusResult:
@@ -156,7 +179,8 @@ def _create_session(repo: Path, session: Session) -> StatusResult:
     with SessionLock(repo, session.canonical_branch):
         if store.exists(session.canonical_branch):
             raise SessionAlreadyExistsError(
-                f"A git-paoding session already exists for branch {session.canonical_branch!r}"
+                f"A git-paoding session already exists for branch {session.canonical_branch!r}; "
+                "use `git-paoding init --replace` for guarded wrong-base recovery"
             )
         session, _replay_atoms, status = reconcile_and_status(repo, session)
         store.save(session)
@@ -179,6 +203,19 @@ def init_session_from_pr(
 ) -> StatusResult:
     """Validate a PR against local objects and initialize from its merge base."""
 
+    repository = repo.resolve()
+    session = _build_pr_session(repository, target=target, slice_pr_prefix=slice_pr_prefix)
+    return _create_session(repository, session)
+
+
+def _build_pr_session(
+    repo: Path,
+    *,
+    target: PullRequestTarget,
+    slice_pr_prefix: str,
+) -> Session:
+    """Validate PR initialization inputs and return an unpersisted session."""
+
     if target.state is not PRState.OPEN:
         raise PullRequestInitializationError(
             f"PR #{target.number} is {target.state.value}; only open PRs can seed a session"
@@ -189,9 +226,8 @@ def init_session_from_pr(
             "supported for initialization"
         )
 
-    repository = repo.resolve()
     try:
-        local_head_oid = rev_parse(repository, f"refs/heads/{target.head_ref_name}^{{commit}}")
+        local_head_oid = rev_parse(repo, f"refs/heads/{target.head_ref_name}^{{commit}}")
     except GitCommandError as error:
         raise PullRequestInitializationError(
             f"Local head branch {target.head_ref_name!r} does not exist. "
@@ -203,20 +239,20 @@ def init_session_from_pr(
             f"#{target.number} expects {target.head_ref_oid}. {_head_branch_instruction(target)}"
         )
 
-    if not plumbing.object_exists(repository, target.base_ref_oid):
+    if not plumbing.object_exists(repo, target.base_ref_oid):
         raise PullRequestInitializationError(
             f"PR #{target.number} base OID {target.base_ref_oid} is not available locally. "
             f"Run `git fetch origin {target.base_ref_name}` before retrying; git-paoding "
             "never fetches automatically."
         )
-    if not plumbing.object_exists(repository, target.head_ref_oid):
+    if not plumbing.object_exists(repo, target.head_ref_oid):
         raise PullRequestInitializationError(
             f"PR #{target.number} head OID {target.head_ref_oid} is not available locally. "
             f"{_head_branch_instruction(target)}"
         )
 
     try:
-        pinned_base_oid = plumbing.merge_base(repository, target.base_ref_oid, target.head_ref_oid)
+        pinned_base_oid = plumbing.merge_base(repo, target.base_ref_oid, target.head_ref_oid)
     except GitCommandError as error:
         raise PullRequestInitializationError(
             f"PR #{target.number} base OID {target.base_ref_oid} and head OID "
@@ -228,7 +264,7 @@ def init_session_from_pr(
             f"{target.head_ref_oid} have no common ancestor"
         )
 
-    local_diffstat = plumbing.diff_numstat(repository, pinned_base_oid, target.head_ref_oid)
+    local_diffstat = plumbing.diff_numstat(repo, pinned_base_oid, target.head_ref_oid)
     github_diffstat = (target.changed_files, target.additions, target.deletions)
     if local_diffstat != github_diffstat:
         raise PullRequestInitializationError(
@@ -239,7 +275,7 @@ def init_session_from_pr(
             "rename/whitespace accounting differences."
         )
 
-    session = Session(
+    return Session(
         canonical_branch=target.head_ref_name,
         base_ref=target.base_ref_name,
         base_oid=pinned_base_oid,
@@ -255,7 +291,90 @@ def init_session_from_pr(
             merge_base_oid=pinned_base_oid,
         ),
     )
-    return _create_session(repository, session)
+
+
+def _replacement_ref_prefix(canonical_branch: str) -> str:
+    return f"refs/heads/paoding/{branch_key(canonical_branch)}/"
+
+
+def _require_replaceable(repo: Path, session: Session) -> None:
+    """Reject every durable or local sign that publication may have begun."""
+
+    if session.publication_started:
+        raise SessionReplacementError(
+            "Cannot replace this session because publication has already started"
+        )
+    if any(slice_.pr_number is not None for slice_ in session.slices):
+        raise SessionReplacementError(
+            "Cannot replace this session because a slice pull request number is recorded"
+        )
+    ref_prefix = _replacement_ref_prefix(session.canonical_branch)
+    if plumbing.for_each_ref(repo, ref_prefix):
+        raise SessionReplacementError(
+            f"Cannot replace this session because local paoding refs exist below {ref_prefix}"
+        )
+    if session.integration_pr is not None and session.source_pr is None:
+        raise SessionReplacementError(
+            "Cannot replace this legacy session because an integration pull request is recorded "
+            "without source pull-request identity"
+        )
+
+
+def replace_session(
+    repo: Path,
+    *,
+    base: str | None = None,
+    pr_target: PullRequestTarget | None = None,
+    canonical_branch: str | None = None,
+    slice_pr_prefix: str = "slice",
+) -> ReplaceResult:
+    """Replace an unpublished session after creating an exact recovery backup."""
+
+    if (base is None) == (pr_target is None):
+        raise ValueError("Exactly one of base or pr_target is required")
+
+    repository = repo.resolve()
+    if pr_target is not None:
+        branch = pr_target.head_ref_name
+        if (
+            canonical_branch is not None
+            and _canonical_branch(repository, canonical_branch) != branch
+        ):
+            raise BranchResolutionError(
+                f"PR head branch {branch!r} does not match canonical_branch {canonical_branch!r}"
+            )
+    else:
+        branch = _canonical_branch(repository, canonical_branch)
+
+    store = JsonSessionStore(repository)
+    with SessionLock(repository, branch):
+        try:
+            old_session = store.load(branch)
+        except SessionNotFoundError as error:
+            raise SessionNotFoundError(
+                f"No git-paoding session exists for branch {branch!r}; use plain "
+                "`git-paoding init` instead of `git-paoding init --replace`"
+            ) from error
+        _require_replaceable(repository, old_session)
+
+        if pr_target is not None:
+            new_session = _build_pr_session(
+                repository,
+                target=pr_target,
+                slice_pr_prefix=slice_pr_prefix,
+            )
+        else:
+            assert base is not None
+            new_session = _build_local_session(
+                repository,
+                base=base,
+                canonical_branch=branch,
+                slice_pr_prefix=slice_pr_prefix,
+            )
+        new_session, _replay_atoms, status = reconcile_and_status(repository, new_session)
+        backup_path = store.backup(branch)
+        store.save(new_session)
+        return ReplaceResult(status=status, backup_path=backup_path)
 
 
 def add_slice(
