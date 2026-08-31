@@ -8,6 +8,7 @@ import pytest
 
 from conftest import FakeBackend, ScratchRepoFactory, ScratchRepository
 from git_paoding.api import (
+    SessionReplacementError,
     add_slice,
     archive,
     assign,
@@ -18,6 +19,7 @@ from git_paoding.api import (
     publish,
     remove_slice,
     rename_slice,
+    replace_session,
     set_focus,
 )
 from git_paoding.core.model import (
@@ -49,7 +51,7 @@ from git_paoding.gitio.plumbing import (
     mktree,
     update_ref,
 )
-from git_paoding.gitio.refs import generated_refs
+from git_paoding.gitio.refs import GeneratedRefs, RefSyncResult, generated_refs
 from git_paoding.gitio.runner import run_git
 from git_paoding.store.jsonstore import JsonSessionStore, branch_key
 
@@ -852,6 +854,49 @@ def test_archive_rejects_an_unmerged_integration_without_side_effects(
     assert fake_backend.closes == closes_before
     assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
     assert JsonSessionStore(scratch.path).load("main").archived is False
+
+
+def test_publish_persists_started_before_first_generated_ref_operation(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+
+    import git_paoding.core.publish as publish_module
+
+    original_sync = publish_module.sync_projection_refs
+    observed_flags: list[bool] = []
+
+    def observe_sync(
+        repo: Path,
+        remote: str,
+        refs: GeneratedRefs,
+        *,
+        base_oid: str,
+        head_oid: str,
+        timeout: float | None = None,
+    ) -> RefSyncResult:
+        observed_flags.append(JsonSessionStore(scratch.path).load("main").publication_started)
+        return original_sync(
+            repo,
+            remote,
+            refs,
+            base_oid=base_oid,
+            head_oid=head_oid,
+            timeout=timeout,
+        )
+
+    monkeypatch.setattr(publish_module, "sync_projection_refs", observe_sync)
+
+    publish(scratch.path, backend=fake_backend)
+
+    assert observed_flags == [True]
+    assert JsonSessionStore(scratch.path).load("main").publication_started is True
+    with pytest.raises(SessionReplacementError, match="publication has already started"):
+        replace_session(scratch.path, base="main")
 
 
 def test_publish_rejects_a_merged_integration_and_preserves_archive_identity(

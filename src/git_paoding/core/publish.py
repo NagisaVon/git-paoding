@@ -488,6 +488,10 @@ def publish_session(
                     head_oid=projection.head_commit_oid,
                 )
 
+        if not session.publication_started:
+            session = session.model_copy(update={"publication_started": True})
+            store.save(session)
+
         generated_ref_count = 2 * len(built_slices)
         with publish_phase(
             progress,
