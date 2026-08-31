@@ -11,9 +11,6 @@ description:
 
 # git-paoding
 
-> **Draft:** This skill remains pre-release until the final dry-run and release
-> review.
-
 Use `git-paoding` to partition the current `Base -> Final` diff into human-sized
 semantic review slices. Keep one canonical integrated implementation state
 throughout.
@@ -127,6 +124,10 @@ Then run:
 git-paoding assign --batch paoding-assignments.json
 ```
 
+The batch plan is ordinary local input, not git-paoding session metadata. Keep
+it untracked, place it outside the working tree, or manage it according to the
+repository's own policy; do not commit it accidentally.
+
 For an interactive assignment, pass the slice followed by one or more
 selectors:
 
@@ -201,7 +202,7 @@ git-paoding archive
 cleans generated refs; it never merges them. It refuses to run while the
 integration PR is still open or merely closed.
 
-## Validate this draft
+## Validate the installed workflow
 
 From the `git-paoding` repository, run the isolated documentation smoke:
 

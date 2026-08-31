@@ -2,10 +2,6 @@
 
 <!-- cspell:words paoding pipx PAODING -->
 
-> **Draft:** This is pre-release documentation until the final skill dry-run and
-> release review. Release-install commands remain provisional until the package
-> is published.
-
 Agent writes globally. Humans review locally.
 
 `git-paoding` lets a coding agent keep one coherent implementation on one
@@ -24,8 +20,7 @@ natural joints.
 
 ## Status
 
-The package is preparing for its first release. The CLI supports the complete
-review lifecycle:
+The CLI supports the complete review lifecycle:
 
 - Initialize a session with a pinned base.
 - Add, list, rename, and remove stable slice identities.
@@ -47,17 +42,7 @@ gh auth login
 gh auth status
 ```
 
-To run the current source checkout:
-
-```bash
-git clone https://github.com/NagisaVon/git-paoding.git
-cd git-paoding
-uv sync --extra dev --locked
-uv run git-paoding --help
-```
-
-The following release-install commands are a release draft until the package
-is published. They must be re-run during the release review:
+Install the released package with one of these methods:
 
 ```bash
 uv tool install git-paoding
@@ -65,7 +50,22 @@ pipx install git-paoding
 python -m pip install git-paoding
 ```
 
-Choose one installation method, not all three.
+Choose one installation method, not all three. Confirm the explicit command and
+Git's external-subcommand form resolve to the same release:
+
+```bash
+git-paoding --version
+git paoding --version
+```
+
+To run a source checkout instead:
+
+```bash
+git clone https://github.com/NagisaVon/git-paoding.git
+cd git-paoding
+uv sync --extra dev --locked
+uv run git-paoding --help
+```
 
 ## Quickstart for authors
 
@@ -146,7 +146,9 @@ The batch request uses the frozen versioned contract:
 Batch assignment is all-or-nothing: an unknown slice, invalid selector, or
 cross-slice conflict rejects the entire request. Set the JSON `force` field to
 `true` when a batch is intentionally repartitioning already-owned atoms; do not
-combine the interactive `--force` option with `--batch`.
+combine the interactive `--force` option with `--batch`. The batch plan is an
+ordinary local input file rather than session metadata; keep it untracked or
+manage it according to the repository's own policy.
 
 For targeted review feedback, focus may provide a default owner for genuinely
 new atoms without overwriting confidently matched ownership:
