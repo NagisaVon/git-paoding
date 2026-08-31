@@ -50,9 +50,10 @@ strict = true
 files = ["src", "tests"]
 
 [tool.pytest.ini_options]
-addopts = ["--strict-config", "--strict-markers"]
+addopts = ["--strict-config", "--strict-markers", "-m", "not performance"]
 testpaths = ["tests"]
 markers = [
     "unit: fast tests without external processes",
     "integration: tests using local Git repositories without network access",
+    "performance: explicit field-shaped architectural operation-count benchmarks",
 ]
