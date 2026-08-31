@@ -60,9 +60,13 @@ def _destination(
     home: Path,
 ) -> Path:
     if target == "codex":
-        base = home / ".agents" / "skills" if scope == "user" else project_root / ".agents" / "skills"
+        base = (
+            home / ".agents" / "skills" if scope == "user" else project_root / ".agents" / "skills"
+        )
     elif target == "claude":
-        base = home / ".claude" / "skills" if scope == "user" else project_root / ".claude" / "skills"
+        base = (
+            home / ".claude" / "skills" if scope == "user" else project_root / ".claude" / "skills"
+        )
     else:  # pragma: no cover - protected by public type and Click validation
         raise AgentInstallError(f"unsupported agent target: {target}")
     return base / "git-paoding"
