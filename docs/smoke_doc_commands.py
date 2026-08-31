@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # cspell:words paoding PAODING
-"""Smoke the commands documented in README.md and the packaged SKILL.md.
+"""Smoke the commands documented in the packaged SKILL.md.
 
 The default path exercises every documented command in an isolated repository,
 including a full publish and archive against a local bare remote and a stateful
@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATED_COMMANDS = (
@@ -70,7 +70,7 @@ def load_fake_state(path: Path) -> dict[str, Any]:
 
     if not path.exists():
         return {"next_number": 1, "prs": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def save_fake_state(path: Path, state: dict[str, Any]) -> None:
@@ -196,7 +196,7 @@ def install_fake_gh(bin_dir: Path) -> None:
 
 
 def smoke_current_cli(command: list[str], workspace: Path, env: dict[str, str]) -> Path:
-    """Exercise the current README and skill workflow end to end."""
+    """Exercise the current skill workflow end to end."""
 
     repository = workspace / "work"
     remote = workspace / "remote.git"
