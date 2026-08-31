@@ -7,6 +7,7 @@ from typing import NoReturn
 import click
 
 from git_paoding import __version__
+from git_paoding.agent_install import AgentInstallError, install_agent_skill
 from git_paoding.cli.facade import ApiFacade, CliFacade
 from git_paoding.cli.render import (
     render_archive,
@@ -44,6 +45,53 @@ def _raise_cli_error(error: Exception) -> NoReturn:
 @click.version_option(version=__version__, prog_name="git-paoding")
 def main() -> None:
     """Semantic review slicing for large agent-generated changes."""
+
+
+@main.group("agent")
+def agent_group() -> None:
+    """Install the packaged workflow for supported coding agents."""
+
+
+@agent_group.command("install")
+@click.option(
+    "--target",
+    "targets",
+    type=click.Choice(("codex", "claude"), case_sensitive=False),
+    multiple=True,
+    required=True,
+    help="Agent integration to install; repeat to install both.",
+)
+@click.option(
+    "--scope",
+    type=click.Choice(("user", "project"), case_sensitive=False),
+    default="user",
+    show_default=True,
+    help="Install for the current user or the current repository.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite packaged files when the destination has different contents.",
+)
+def agent_install_command(targets: tuple[str, ...], scope: str, force: bool) -> None:
+    """Install the bundled standalone skill without a plugin marketplace UI."""
+
+    try:
+        results = [
+            install_agent_skill(
+                target,  # type: ignore[arg-type]
+                scope,  # type: ignore[arg-type]
+                project_root=Path.cwd(),
+                force=force,
+            )
+            for target in targets
+        ]
+    except (AgentInstallError, OSError) as error:
+        _raise_cli_error(error)
+
+    for result in results:
+        action = "Installed" if result.changed else "Already installed"
+        click.echo(f"{action} {result.target} skill: {result.destination}")
 
 
 @main.command("init")

@@ -30,7 +30,29 @@ The CLI supports the complete review lifecycle:
 - Publish or refresh Draft slice PRs and the Draft integration PR.
 - Archive slice PRs and generated refs after the integration PR merges.
 
-## Requirements and installation
+## Install the CLI and agent workflow
+
+`git-paoding` is designed for coding agents rather than as a human-operated UI.
+A complete installation has two parts:
+
+1. The Python package provides the deterministic `git-paoding` executable.
+2. The agent skill or plugin teaches Codex or Claude Code when and how to use it.
+
+Installing only the Python package does not make an agent discover the workflow.
+Install the CLI and one agent integration together.
+
+### Give this page to an agent
+
+You can send an agent this repository URL and the following request:
+
+```text
+Install git-paoding by following the repository README. Install the Python CLI
+and the integration for the agent you are running as, verify both, and then
+explain the workflow. Do not initialize a session, push, publish, or change any
+repository until I give you a specific review-slicing task.
+```
+
+### 1. Install the CLI
 
 `git-paoding` requires Python 3.11 or newer, Git, and
 [GitHub CLI](https://cli.github.com/) 2.45.0 or newer. GitHub operations reuse
@@ -42,7 +64,8 @@ gh auth login
 gh auth status
 ```
 
-Install the released package with one of these methods:
+Install the released package with one of these methods. `uv tool` or `pipx` is
+recommended because it keeps the agent-facing command isolated:
 
 ```bash
 uv tool install git-paoding
@@ -58,7 +81,14 @@ git-paoding --version
 git paoding --version
 ```
 
-To run a source checkout instead:
+If the first PyPI release is not available yet, install the current GitHub
+version directly:
+
+```bash
+uv tool install "git+https://github.com/NagisaVon/git-paoding.git"
+```
+
+To install from a source checkout instead:
 
 ```bash
 git clone https://github.com/NagisaVon/git-paoding.git
@@ -67,7 +97,97 @@ uv sync --extra dev --locked
 uv run git-paoding --help
 ```
 
-## Quickstart for authors
+### 2. Install the agent integration
+
+Choose one of the following installation methods for each agent. The bundled
+standalone skill and the marketplace plugin provide the same instructions, so
+installing both for the same agent is unnecessary.
+
+#### Option A: install the bundled standalone skill
+
+The Python distribution carries the same `SKILL.md` used by both plugins. The
+following commands copy that bundled skill into the official personal skill
+directory and work without a plugin UI:
+
+For Codex:
+
+```bash
+git-paoding agent install --target codex --scope user
+```
+
+For Claude Code:
+
+```bash
+git-paoding agent install --target claude --scope user
+```
+
+To install both, repeat `--target` in one command:
+
+```bash
+git-paoding agent install --target codex --target claude --scope user
+```
+
+Use `--scope project` to install into the current repository instead of the
+current user's global skill directory. Re-run with `--force` after upgrading if
+the installed skill was modified locally. Codex installs to
+`.agents/skills/git-paoding`; Claude Code installs to
+`.claude/skills/git-paoding` (under the home directory for user scope).
+
+Verify the skill appears in Codex with `/skills`. In Claude Code, run `/skills`
+or invoke `/git-paoding` directly. Restart the agent only if a newly created
+top-level skill directory is not detected in the current session.
+
+#### Option B: install through the plugin marketplace
+
+This repository is also a marketplace for a skill-only `git-paoding` plugin.
+The Codex and Claude Code manifests share one packaged skill, so their behavior
+does not drift.
+
+For Codex, add the GitHub marketplace:
+
+```bash
+codex plugin marketplace add NagisaVon/git-paoding
+codex plugin add git-paoding@git-paoding
+```
+
+The same plugin then appears in the Plugins Directory in the ChatGPT desktop
+app. Invoke its skill as `$git-paoding`.
+
+For Claude Code, the complete installation is available from the CLI:
+
+```bash
+claude plugin marketplace add NagisaVon/git-paoding
+claude plugin install git-paoding@git-paoding --scope user
+```
+
+Run `/reload-plugins` if Claude Code asks for it, then invoke the plugin skill as
+`/git-paoding:git-paoding`.
+
+### 3. Ask the agent to prepare review slices
+
+For Codex:
+
+```text
+$git-paoding Prepare semantic review slices for the complete committed change
+on my current branch, using origin/main as the base. Inspect and propose the
+slice assignments first. Do not push or publish until I approve the plan.
+```
+
+For the Claude Code plugin:
+
+```text
+/git-paoding:git-paoding Prepare semantic review slices for the complete
+committed change on my current branch, using origin/main as the base. Inspect
+and propose the slice assignments first. Do not push or publish until I approve
+the plan.
+```
+
+## Run a review-slicing session
+
+After installation, Codex and Claude Code follow the same operational workflow
+below. Their invocation syntax differs (`$git-paoding` in Codex and
+`/git-paoding:git-paoding` for the Claude Code plugin), but both use the same
+`git-paoding` CLI and repository state.
 
 Start from the branch that contains the complete, committed implementation. The
 base is pinned when the session is initialized; moving `origin/main` later does
@@ -113,8 +233,8 @@ creates or updates the Draft integration PR and its slice index. Operational
 failures use exit code `1`; success uses `0`.
 
 Keep the canonical branch available on the selected Git remote before
-publishing. If it has not been pushed, obtain the author's approval before doing
-so:
+publishing. If it has not been pushed, obtain the change owner's approval before
+doing so:
 
 ```bash
 git push -u origin HEAD
@@ -175,8 +295,8 @@ Every slice PR is Draft and carries a
 - Only the integration PR represents the complete change and real merge target.
 
 Use normal GitHub review features on a slice PR: read its narrative, inspect
-Files changed, and leave inline comments. After feedback, the author updates the
-canonical branch and refreshes the same slice PR. GitHub may mark comments
+Files changed, and leave inline comments. After feedback, update the canonical
+branch and refresh the same slice PR. GitHub may mark comments
 outdated when their lines change; the discussion history and stable PR identity
 remain useful.
 
@@ -224,23 +344,3 @@ surface without merging any slice PR:
 ```bash
 git-paoding archive
 ```
-
-## Documentation smoke test
-
-Maintainers can exercise the documented CLI in an isolated local repository
-with a bare Git remote and a fake GitHub CLI backend:
-
-```bash
-uv run --no-sync python docs/smoke_doc_commands.py
-```
-
-The release gate explicitly requires the complete integrated command surface:
-
-```bash
-PAODING_REQUIRE_FINAL_CLI=1 uv run --no-sync python docs/smoke_doc_commands.py
-```
-
-The smoke reuses the Python interpreter that launched it, so its child CLI has
-the same installed dependencies. The strict run rejects a missing batch,
-`--force`, focus, slice lifecycle, or archive command instead of silently
-skipping it.
