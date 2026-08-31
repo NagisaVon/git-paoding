@@ -28,6 +28,7 @@ from git_paoding.core.model import (
     PublishOutcome,
     SliceStatus,
 )
+from git_paoding.core.progress import ProgressEvent, PublishPhase
 from git_paoding.core.publish import PublishError
 from git_paoding.github.backend import DuplicatePullRequestMarkerError
 from git_paoding.github.lifecycle import MergedSlicePullRequestError
@@ -157,9 +158,15 @@ def test_happy_path_second_publish_is_full_no_op(
     original_force_push = refs_module._force_push
     pushed_refs: list[str] = []
 
-    def record_force_push(repo: Path, remote: str, ref: str) -> None:
+    def record_force_push(
+        repo: Path,
+        remote: str,
+        ref: str,
+        *,
+        timeout: float | None = None,
+    ) -> None:
         pushed_refs.append(ref)
-        original_force_push(repo, remote, ref)
+        original_force_push(repo, remote, ref, timeout=timeout)
 
     monkeypatch.setattr(refs_module, "_force_push", record_force_push)
 
@@ -206,6 +213,35 @@ def test_happy_path_second_publish_is_full_no_op(
     assert fake_backend.creates == creates_before
     assert fake_backend.updates == updates_before
     assert ls_remote(scratch.path, "origin", refs.base, refs.head) == advertised_before
+
+
+def test_publish_reports_the_named_phase_sequence(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch, _remote = _prepare_repository(scratch_repo_factory, tmp_path, fake_backend)
+    assign(scratch.path, "review", ["app.py"])
+    events: list[ProgressEvent] = []
+
+    publish(scratch.path, backend=fake_backend, progress=events.append)
+
+    phase_events = [
+        event
+        for index, event in enumerate(events)
+        if index == 0 or event.phase is not events[index - 1].phase
+    ]
+    assert [event.phase for event in phase_events] == list(PublishPhase)
+    assert [event.message for event in phase_events] == [
+        "Reconciling canonical diff",
+        "Validating GitHub PR identities",
+        "Loading shared projection context",
+        "Building projection 1/1: review",
+        "Synchronizing 2 generated refs",
+        "Creating slice PR 1/1: review",
+        "Updating integration PR index",
+        "Persisting final metadata",
+    ]
 
 
 def test_unassigned_publish_has_zero_remote_calls_or_ref_writes(

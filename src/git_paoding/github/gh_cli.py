@@ -7,10 +7,13 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from time import perf_counter
 from typing import Final, Sequence
 
 from git_paoding.core.model import PRRecord, PRState
+from git_paoding.core.progress import report_network_process
 from git_paoding.github.backend import GitHubBackendError, PullRequestNotFoundError
+from git_paoding.gitio.trace import OpCategory, record
 
 MINIMUM_GH_VERSION: Final = (2, 45, 0)
 _OPEN_PR_LIST_LIMIT: Final = 1000
@@ -44,6 +47,10 @@ class GhRateLimitError(GhCliError):
 
 class GhVersionError(GhCliError):
     """Raised when the installed ``gh`` version is unsupported or unreadable."""
+
+
+class GhTimeoutError(GhCliError):
+    """Raised when a GitHub CLI command exceeds its configured time limit."""
 
 
 class GhCommandError(GhCliError):
@@ -143,14 +150,24 @@ def _mapped_command_error(
 class GhCliBackend:
     """GitHub PR operations implemented by commands in one repository."""
 
-    def __init__(self, cwd: Path, *, executable: str = "gh") -> None:
+    def __init__(
+        self,
+        cwd: Path,
+        *,
+        executable: str = "gh",
+        timeout: float | None = 120.0,
+    ) -> None:
         self.cwd = cwd
         self.executable = executable
+        self.timeout = timeout
 
     def _run(self, args: Sequence[str]) -> str:
         command_args = tuple(args)
         process_env = os.environ.copy()
         process_env["LC_ALL"] = "C"
+        category = _operation_category(command_args)
+        report_network_process()
+        started = perf_counter()
         try:
             completed = subprocess.run(
                 (self.executable, *command_args),
@@ -160,12 +177,20 @@ class GhCliBackend:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
+                timeout=self.timeout,
             )
+        except subprocess.TimeoutExpired:
+            raise GhTimeoutError(
+                f"gh {_safe_subcommand(command_args)} timed out after "
+                f"{_format_timeout(self.timeout)} seconds"
+            ) from None
         except FileNotFoundError as error:
             raise GhUnavailableError(
                 "GitHub CLI (`gh`) was not found on PATH. Install it from "
                 "https://cli.github.com/ and then run `gh auth login`."
             ) from error
+        finally:
+            record(category, perf_counter() - started)
 
         if completed.returncode != 0:
             raise _mapped_command_error(
@@ -293,6 +318,30 @@ def _required_str(payload: dict[str, object], key: str) -> str:
     if not isinstance(value, str):
         raise GhResponseError(f"GitHub PR JSON field {key!r} has an invalid or missing value")
     return value
+
+
+def _safe_subcommand(args: tuple[str, ...]) -> str:
+    """Return only the stable operation name, never user-controlled arguments."""
+
+    if not args:
+        return "command"
+    if args[0] in {"auth", "pr"} and len(args) > 1:
+        return f"{args[0]} {args[1]}"
+    return args[0]
+
+
+def _operation_category(args: tuple[str, ...]) -> OpCategory:
+    """Classify supported GitHub CLI operations as reads or writes."""
+
+    return (
+        OpCategory.GH_WRITE
+        if args[:2] in {("pr", "create"), ("pr", "edit"), ("pr", "close")}
+        else OpCategory.GH_READ
+    )
+
+
+def _format_timeout(timeout: float | None) -> str:
+    return f"{timeout:g}" if timeout is not None else "unknown"
 
 
 def _required_int(payload: dict[str, object], key: str) -> int:

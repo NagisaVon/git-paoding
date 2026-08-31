@@ -71,12 +71,18 @@ def update_local_projection_refs(
     update_ref(repo, refs.head, head_oid)
 
 
-def _force_push(repo: Path, remote: str, ref: str) -> None:
-    run_git(("push", "--force", remote, f"{ref}:{ref}"), cwd=repo)
+def _force_push(repo: Path, remote: str, ref: str, *, timeout: float | None = None) -> None:
+    run_git(("push", "--force", remote, f"{ref}:{ref}"), cwd=repo, timeout=timeout)
 
 
-def _delete_remote_ref(repo: Path, remote: str, ref: str) -> None:
-    run_git(("push", remote, "--delete", ref), cwd=repo)
+def _delete_remote_ref(
+    repo: Path,
+    remote: str,
+    ref: str,
+    *,
+    timeout: float | None = None,
+) -> None:
+    run_git(("push", remote, "--delete", ref), cwd=repo, timeout=timeout)
 
 
 def sync_projection_refs(
@@ -86,6 +92,7 @@ def sync_projection_refs(
     *,
     base_oid: str,
     head_oid: str,
+    timeout: float | None = None,
 ) -> RefSyncResult:
     """Repair remote projection refs using one authoritative ``ls-remote``.
 
@@ -101,14 +108,17 @@ def sync_projection_refs(
         base_oid=base_oid,
         head_oid=head_oid,
     )
-    advertised = {item.ref: item.oid for item in ls_remote(repo, remote, refs.base, refs.head)}
+    advertised = {
+        item.ref: item.oid
+        for item in ls_remote(repo, remote, refs.base, refs.head, timeout=timeout)
+    }
     base_pushed = advertised.get(refs.base) != base_oid
     head_pushed = advertised.get(refs.head) != head_oid
 
     if base_pushed:
-        _force_push(repo, remote, refs.base)
+        _force_push(repo, remote, refs.base, timeout=timeout)
     if head_pushed:
-        _force_push(repo, remote, refs.head)
+        _force_push(repo, remote, refs.head, timeout=timeout)
 
     return RefSyncResult(
         refs=refs,
@@ -117,7 +127,13 @@ def sync_projection_refs(
     )
 
 
-def delete_projection_refs(repo: Path, remote: str, refs: GeneratedRefs) -> RefDeleteResult:
+def delete_projection_refs(
+    repo: Path,
+    remote: str,
+    refs: GeneratedRefs,
+    *,
+    timeout: float | None = None,
+) -> RefDeleteResult:
     """Delete one archived slice's generated refs locally and remotely.
 
     Remote existence is read in one batch so retries skip refs that an earlier
@@ -127,14 +143,17 @@ def delete_projection_refs(repo: Path, remote: str, refs: GeneratedRefs) -> RefD
     after remote cleanup succeeds.
     """
 
-    advertised = {item.ref: item.oid for item in ls_remote(repo, remote, refs.base, refs.head)}
+    advertised = {
+        item.ref: item.oid
+        for item in ls_remote(repo, remote, refs.base, refs.head, timeout=timeout)
+    }
     base_deleted = refs.base in advertised
     head_deleted = refs.head in advertised
 
     if head_deleted:
-        _delete_remote_ref(repo, remote, refs.head)
+        _delete_remote_ref(repo, remote, refs.head, timeout=timeout)
     if base_deleted:
-        _delete_remote_ref(repo, remote, refs.base)
+        _delete_remote_ref(repo, remote, refs.base, timeout=timeout)
 
     update_ref(repo, refs.head, None)
     update_ref(repo, refs.base, None)

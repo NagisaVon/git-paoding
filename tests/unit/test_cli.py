@@ -26,6 +26,7 @@ from git_paoding.core.model import (
     SliceSummary,
     StatusResult,
 )
+from git_paoding.core.progress import ProgressEvent, PublishPhase
 from git_paoding.core.selectors import assign_batch_selectors
 
 
@@ -251,10 +252,14 @@ def test_publish_action_needed_exits_two_in_both_rendering_modes(
         *,
         backend: object,
         remote: str = "origin",
+        progress: object = None,
+        network_timeout: float | None = 120.0,
     ) -> PublishResult:
+        if callable(progress):
+            progress(SimpleNamespace(message="Reconciling canonical diff"))
         return PublishResult(action_needed=True, status=status)
 
-    monkeypatch.setattr(cli_main, "_backend", fake_backend)
+    monkeypatch.setattr(cli_main, "_backend", lambda repo, timeout=None: fake_backend(repo))
     monkeypatch.setattr(facade_api, "publish", fake_publish)
     arguments = ["publish", "--json"] if as_json else ["publish"]
 
@@ -262,13 +267,79 @@ def test_publish_action_needed_exits_two_in_both_rendering_modes(
 
     assert result.exit_code == 2
     if as_json:
-        payload = json.loads(result.output)
+        payload = json.loads(result.stdout)
         assert payload["contract_version"] == 0
         assert payload["action_needed"] is True
         assert payload["status"] == status.model_dump(mode="json")
+        assert "Reconciling canonical diff" in result.stderr
     else:
         assert "Publish stopped before remote effects." in result.output
         assert "Action needed: 1 unassigned, 0 ambiguous" in result.output
+
+
+@pytest.mark.unit
+def test_publish_json_keeps_progress_and_trace_on_stderr_and_disables_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def fake_backend(repo: Path, *, timeout: float | None) -> object:
+        calls.append(("backend", timeout))
+        return object()
+
+    def fake_publish(
+        repo: Path,
+        *,
+        backend: object,
+        remote: str,
+        progress: object,
+        network_timeout: float | None,
+    ) -> PublishResult:
+        calls.append(("publish", remote, network_timeout))
+        assert callable(progress)
+        progress(ProgressEvent(PublishPhase.RECONCILE, "Reconciling canonical diff"))
+        return PublishResult(action_needed=False)
+
+    monkeypatch.setattr(cli_main, "_backend", fake_backend)
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(publish=fake_publish))
+
+    result = CliRunner().invoke(
+        cli_main.main,
+        ["publish", "--json", "--trace", "--network-timeout", "0"],
+    )
+
+    assert result.exit_code == 0
+    assert PublishResult.model_validate_json(result.stdout) == PublishResult(action_needed=False)
+    assert "Reconciling canonical diff" in result.stderr
+    assert "Publish complete in" in result.stderr
+    assert "Trace:" in result.stderr
+    assert "git-local: 0 processes" in result.stderr
+    assert calls == [("backend", None), ("publish", "origin", None)]
+
+
+@pytest.mark.unit
+def test_publish_quiet_suppresses_progress_but_keeps_json_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_publish(
+        repo: Path,
+        *,
+        backend: object,
+        remote: str,
+        progress: object,
+        network_timeout: float | None,
+    ) -> PublishResult:
+        assert progress is None
+        return PublishResult(action_needed=False)
+
+    monkeypatch.setattr(cli_main, "_backend", lambda repo, timeout: object())
+    monkeypatch.setattr(cli_main, "_facade", SimpleNamespace(publish=fake_publish))
+
+    result = CliRunner().invoke(cli_main.main, ["publish", "--json", "--quiet"])
+
+    assert result.exit_code == 0
+    assert PublishResult.model_validate_json(result.stdout) == PublishResult(action_needed=False)
+    assert result.stderr == ""
 
 
 @pytest.mark.unit

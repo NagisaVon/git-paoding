@@ -22,6 +22,7 @@ from git_paoding.core.model import (
     SliceStatus,
     StatusResult,
 )
+from git_paoding.core.progress import ProgressCallback
 from git_paoding.core.publish import (
     archive_session,
     publish_session,
@@ -377,6 +378,8 @@ def publish(
     backend: GitHubBackend,
     canonical_branch: str | None = None,
     remote: str = "origin",
+    progress: ProgressCallback | None = None,
+    network_timeout: float | None = 120.0,
 ) -> PublishResult:
     """Run the idempotent projection/ref/PR publication pipeline."""
 
@@ -387,6 +390,8 @@ def publish(
         canonical_branch=branch,
         backend=backend,
         remote=remote,
+        progress=progress,
+        network_timeout=network_timeout,
     )
 
 

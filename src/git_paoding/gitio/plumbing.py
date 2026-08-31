@@ -159,10 +159,15 @@ def update_ref(repo: Path, ref: str, new_oid: str | None, *, old_oid: str | None
     run_git(args, cwd=repo)
 
 
-def ls_remote(repo: Path, remote: str, *patterns: str) -> tuple[RemoteRef, ...]:
+def ls_remote(
+    repo: Path,
+    remote: str,
+    *patterns: str,
+    timeout: float | None = None,
+) -> tuple[RemoteRef, ...]:
     """Read refs advertised by a remote without fetching or updating local refs."""
 
-    output = run_git(("ls-remote", remote, *patterns), cwd=repo).stdout
+    output = run_git(("ls-remote", remote, *patterns), cwd=repo, timeout=timeout).stdout
     refs: list[RemoteRef] = []
     for line in output.splitlines():
         raw_oid, raw_ref = line.split(b"\t", maxsplit=1)

@@ -7,7 +7,11 @@ import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from time import perf_counter
 from typing import Mapping, Sequence
+
+from git_paoding.core.progress import report_network_process
+from git_paoding.gitio.trace import OpCategory, record
 
 
 class GitFailureKind(str, Enum):
@@ -40,6 +44,10 @@ class GitError(RuntimeError):
 
 class GitUnavailableError(GitError):
     """Raised when the Git executable cannot be found."""
+
+
+class GitTimeoutError(GitError):
+    """Raised when a Git command exceeds its configured time limit."""
 
 
 class GitCommandError(GitError):
@@ -99,6 +107,7 @@ def run_git(
     cwd: Path,
     input_data: bytes | None = None,
     env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ) -> GitResult:
     """Run Git in an explicit repository directory and return byte-preserving output."""
 
@@ -108,6 +117,14 @@ def run_git(
     if env is not None:
         process_env.update(env)
 
+    category = (
+        OpCategory.GIT_REMOTE
+        if command_args and command_args[0] in {"fetch", "ls-remote", "push"}
+        else OpCategory.GIT_LOCAL
+    )
+    if category is OpCategory.GIT_REMOTE:
+        report_network_process()
+    started = perf_counter()
     try:
         completed = subprocess.run(
             ("git", *command_args),
@@ -117,9 +134,17 @@ def run_git(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        subcommand = command_args[0] if command_args else "command"
+        raise GitTimeoutError(
+            f"git {subcommand} timed out after {_format_timeout(timeout)} seconds"
+        ) from None
     except FileNotFoundError as error:
         raise GitUnavailableError("Git executable was not found on PATH") from error
+    finally:
+        record(category, perf_counter() - started)
 
     stderr = completed.stderr.decode("utf-8", errors="surrogateescape")
     if completed.returncode != 0:
@@ -131,3 +156,9 @@ def run_git(
             kind=_classify_failure(stderr),
         )
     return GitResult(stdout=completed.stdout, stderr=stderr)
+
+
+def _format_timeout(timeout: float | None) -> str:
+    """Render a timeout without exposing command arguments."""
+
+    return f"{timeout:g}" if timeout is not None else "unknown"
