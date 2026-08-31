@@ -205,10 +205,15 @@ def _find_integration_pr(
     expected_base_ref = _integration_base_ref(session, remote)
     stored: PRRecord | None = None
     if session.integration_pr is not None:
-        try:
-            stored = backend.get_pr(session.integration_pr)
-        except PullRequestNotFoundError:
-            stored = None
+        stored = next(
+            (pr for pr in open_prs if pr.number == session.integration_pr),
+            None,
+        )
+        if stored is None:
+            try:
+                stored = backend.get_pr(session.integration_pr)
+            except PullRequestNotFoundError:
+                stored = None
         if stored is not None and stored.state is PRState.MERGED:
             raise PublishError(
                 f"Integration pull request #{stored.number} is already merged; "
@@ -295,6 +300,9 @@ def _find_slice_pr(
         return matches[0]
     if stored_number is None:
         return None
+    listed = next((pr for pr in open_prs if pr.number == stored_number), None)
+    if listed is not None:
+        return listed
     try:
         stored = backend.get_pr(stored_number)
     except PullRequestNotFoundError:
@@ -419,6 +427,7 @@ def publish_session(
                 )
                 if existing is not None:
                     resolved_prs[slice_.id] = existing
+            refresh_existing_prs = existing_integration_pr is not None or bool(resolved_prs)
 
         projection_targets = [
             slice_
@@ -522,6 +531,25 @@ def publish_session(
                     ref_sync_no_op=batch_ref_sync.slice_no_op(built.refs),
                 )
 
+        if refresh_existing_prs:
+            open_prs = backend.list_open_prs()
+            existing_integration_pr = _find_integration_pr(
+                backend,
+                session,
+                open_prs,
+                remote=remote,
+            )
+            resolved_prs = {}
+            for slice_ in session.slices:
+                existing = _find_slice_pr(
+                    backend,
+                    slice_id=slice_.id,
+                    stored_number=slice_.pr_number,
+                    open_prs=open_prs,
+                )
+                if existing is not None:
+                    resolved_prs[slice_.id] = existing
+
         active_slices = [slice_ for slice_ in session.slices if slice_.status is SliceStatus.ACTIVE]
         first_active = active_slices[0].id if active_slices else "none"
         with publish_phase(
@@ -540,6 +568,8 @@ def publish_session(
             if existing_integration_pr is None:
                 integration_pr = _create_integration_pr(backend, session, remote=remote)
                 maintained_integration_title = _integration_title(session)
+                session = session.model_copy(update={"integration_pr": integration_pr.number})
+                store.save(session)
             else:
                 integration_pr = existing_integration_pr
                 maintained_integration_title = integration_pr.title
@@ -549,6 +579,7 @@ def publish_session(
 
             created_slice_ids: set[str] = set()
             updated_slices = list(session.slices)
+            slice_indices = {slice_.id: index for index, slice_ in enumerate(session.slices)}
             branch = branch_key(session.canonical_branch)
             removed_refs: list[GeneratedRefs] = []
             for index, slice_ in enumerate(session.slices):
@@ -603,6 +634,12 @@ def publish_session(
                 open_prs.append(created)
                 resolved_prs[slice_.id] = created
                 created_slice_ids.add(slice_.id)
+                session_index = slice_indices[slice_.id]
+                updated_slices[session_index] = slice_.model_copy(
+                    update={"pr_number": created.number}
+                )
+                session = session.model_copy(update={"slices": updated_slices})
+                store.save(session)
 
             prior_prs = dict(resolved_prs)
             for slice_ in active_slices:

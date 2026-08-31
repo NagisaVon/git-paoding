@@ -137,6 +137,37 @@ def _prepare_two_slice_repository(
     return scratch, remote
 
 
+def _prepare_seven_slice_repository(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> ScratchRepository:
+    slice_ids = tuple(f"slice-{index}" for index in range(1, 8))
+    scratch = scratch_repo_factory(
+        {f"{slice_id}.txt": "old\n" for slice_id in slice_ids},
+        {f"{slice_id}.txt": "new\n" for slice_id in slice_ids},
+    )
+    run_git(("branch", "base", scratch.base_oid), cwd=scratch.path)
+    remote = tmp_path / "seven-slice.git"
+    run_git(("init", "--bare", "--quiet", str(remote)), cwd=tmp_path)
+    run_git(("remote", "add", "origin", str(remote)), cwd=scratch.path)
+    run_git(
+        (
+            "push",
+            "--quiet",
+            "origin",
+            "refs/heads/base:refs/heads/base",
+            "refs/heads/main:refs/heads/main",
+        ),
+        cwd=scratch.path,
+    )
+    init_session(scratch.path, "base", backend=fake_backend)
+    for slice_id in slice_ids:
+        add_slice(scratch.path, slice_id, f"Review {slice_id}")
+        assign(scratch.path, slice_id, [f"{slice_id}.txt"])
+    return scratch
+
+
 def _integration_pr(
     number: int,
     *,
@@ -322,6 +353,117 @@ def test_multi_slice_publish_uses_one_remote_advertisement_and_at_most_one_push(
         PublishOutcome.NO_OP,
     ]
     assert retry_trace.counts[OpCategory.GIT_REMOTE] == 1
+
+
+def test_seven_new_slices_bound_github_reads_and_only_write_integration_index(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+) -> None:
+    scratch = _prepare_seven_slice_repository(
+        scratch_repo_factory,
+        tmp_path,
+        fake_backend,
+    )
+
+    result = publish(scratch.path, backend=fake_backend)
+
+    assert result.integration_pr == 1
+    assert fake_backend.ready_checks == 1
+    assert fake_backend.lists == 1
+    assert fake_backend.creates == list(range(1, 9))
+    assert fake_backend.gets == []
+    assert fake_backend.updates == [1]
+    assert [item.outcome for item in result.slices] == [PublishOutcome.CREATED] * 7
+
+
+def test_republish_refreshes_once_and_only_edits_changed_records(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, _remote = _prepare_two_slice_repository(
+        scratch_repo_factory,
+        tmp_path,
+        fake_backend,
+    )
+    first = publish(scratch.path, backend=fake_backend)
+    first_number = first.slices[0].pr_number
+    second_number = first.slices[1].pr_number
+    assert first.integration_pr is not None
+    assert first_number is not None and second_number is not None
+    rename_slice(scratch.path, "first", "Human-readable first change")
+
+    original_list = FakeBackend.list_open_prs
+    publish_list_calls = 0
+
+    def list_with_concurrent_narrative(backend: FakeBackend) -> list[PRRecord]:
+        nonlocal publish_list_calls
+        publish_list_calls += 1
+        if publish_list_calls == 2:
+            current = backend.prs[second_number]
+            backend.prs[second_number] = current.model_copy(
+                update={"body": f"Concurrent reviewer note.\n\n{current.body}"}
+            )
+        return original_list(backend)
+
+    monkeypatch.setattr(FakeBackend, "list_open_prs", list_with_concurrent_narrative)
+    updates_before = len(fake_backend.updates)
+    gets_before = len(fake_backend.gets)
+
+    publish(scratch.path, backend=fake_backend)
+
+    assert publish_list_calls == 2
+    assert fake_backend.gets[gets_before:] == []
+    assert fake_backend.updates[updates_before:] == [first_number, first.integration_pr]
+    assert fake_backend.prs[first_number].title == "[slice] Human-readable first change"
+    assert fake_backend.prs[second_number].body.startswith("Concurrent reviewer note.\n\n")
+
+
+def test_slice_identities_are_persisted_before_the_next_create(
+    scratch_repo_factory: ScratchRepoFactory,
+    tmp_path: Path,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch = _prepare_seven_slice_repository(
+        scratch_repo_factory,
+        tmp_path,
+        fake_backend,
+    )
+    original_create = FakeBackend.create_draft_pr
+    slice_creates = 0
+
+    def interrupt_before_fourth_slice(
+        backend: FakeBackend,
+        *,
+        title: str,
+        body: str,
+        base_ref: str,
+        head_ref: str,
+    ) -> PRRecord:
+        nonlocal slice_creates
+        if head_ref != "main":
+            if slice_creates == 3:
+                raise RuntimeError("interrupted before fourth slice creation")
+            slice_creates += 1
+        return original_create(
+            backend,
+            title=title,
+            body=body,
+            base_ref=base_ref,
+            head_ref=head_ref,
+        )
+
+    monkeypatch.setattr(FakeBackend, "create_draft_pr", interrupt_before_fourth_slice)
+
+    with pytest.raises(RuntimeError, match="before fourth slice"):
+        publish(scratch.path, backend=fake_backend)
+
+    stored = JsonSessionStore(scratch.path).load("main")
+    assert stored.integration_pr == 1
+    assert [slice_.pr_number for slice_ in stored.slices] == [2, 3, 4, None, None, None, None]
 
 
 def test_unassigned_publish_has_zero_remote_calls_or_ref_writes(

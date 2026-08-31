@@ -61,7 +61,10 @@ class FakeBackend:
         return pr
 
     def update_pr(self, number: int, *, title: str, body: str) -> PRRecord:
-        current = self.get_pr(number)
+        try:
+            current = self.prs[number]
+        except KeyError as error:
+            raise PullRequestNotFoundError(f"Pull request #{number} does not exist") from error
         updated = current.model_copy(update={"title": title, "body": body})
         self.prs[number] = updated
         self.updates.append(number)
@@ -70,7 +73,10 @@ class FakeBackend:
         return updated
 
     def close_pr(self, number: int) -> PRRecord:
-        current = self.get_pr(number)
+        try:
+            current = self.prs[number]
+        except KeyError as error:
+            raise PullRequestNotFoundError(f"Pull request #{number} does not exist") from error
         closed = current.model_copy(update={"state": PRState.CLOSED})
         self.prs[number] = closed
         self.closes.append(number)
