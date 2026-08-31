@@ -171,8 +171,18 @@ def test_empty_body_becomes_only_the_machine_region() -> None:
 def test_integration_index_links_published_slices_and_labels_empty_ones() -> None:
     content = render_integration_machine_content(
         [
-            ("storage", "Storage", "https://example.test/pulls/2"),
-            ("empty", "Later work", None),
+            IntegrationSliceLink(
+                slice_id="storage",
+                title="Storage",
+                number=2,
+                url="https://example.test/pulls/2",
+            ),
+            IntegrationSliceLink(
+                slice_id="empty",
+                title="Later work",
+                number=None,
+                url=None,
+            ),
         ]
     )
 
@@ -186,11 +196,25 @@ def test_integration_rewrite_preserves_human_narrative_on_no_op_refresh() -> Non
     narrative = "Why this integrated change exists.  "
     first = rewrite_integration_body(
         narrative,
-        slices=[("storage", "Storage", "https://example.test/pulls/2")],
+        slices=[
+            IntegrationSliceLink(
+                slice_id="storage",
+                title="Storage",
+                number=2,
+                url="https://example.test/pulls/2",
+            )
+        ],
     )
     second = rewrite_integration_body(
         first,
-        slices=[("storage", "Storage", "https://example.test/pulls/2")],
+        slices=[
+            IntegrationSliceLink(
+                slice_id="storage",
+                title="Storage",
+                number=2,
+                url="https://example.test/pulls/2",
+            )
+        ],
     )
 
     assert second == first

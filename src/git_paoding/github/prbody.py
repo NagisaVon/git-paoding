@@ -124,30 +124,15 @@ def render_slice_machine_content(
     return "\n\n".join(parts)
 
 
-def _normalize_integration_slice(
-    value: IntegrationSliceLink | tuple[str, str, str | None],
-) -> IntegrationSliceLink:
-    if isinstance(value, IntegrationSliceLink):
-        return value
-    slice_id, title, url = value
-    return IntegrationSliceLink(
-        slice_id=slice_id,
-        title=title,
-        number=_pr_number_from_url(url) if url is not None else None,
-        url=url,
-    )
-
-
 def render_integration_machine_content(
-    slices: Sequence[IntegrationSliceLink | tuple[str, str, str | None]],
+    slices: Sequence[IntegrationSliceLink],
 ) -> str:
     """Render the integration PR's machine-owned slice index."""
 
     lines = ["## Review slices"]
     if not slices:
         lines.append("_No active review slices._")
-    for raw_slice in slices:
-        slice_ = _normalize_integration_slice(raw_slice)
+    for slice_ in slices:
         if slice_.url is None:
             lines.append(f"- `{slice_.slice_id}` — {slice_.title} _(currently empty)_")
         else:
@@ -227,7 +212,7 @@ def rewrite_slice_body(
 def rewrite_integration_body(
     body: str,
     *,
-    slices: Sequence[IntegrationSliceLink | tuple[str, str, str | None]],
+    slices: Sequence[IntegrationSliceLink],
 ) -> str:
     """Refresh only the integration PR's machine-owned slice index."""
 
